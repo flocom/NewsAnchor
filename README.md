@@ -141,6 +141,24 @@ icons/                 16 / 48 / 128 PNG icons
 
 No build step. Edit the files, click **Reload** in `chrome://extensions/`.
 
+## Store assets
+
+The Chrome Web Store promotional images and screenshots live in
+[`promo/`](promo/). They're generated programmatically with PIL from
+[`promo/gen_promo.py`](promo/gen_promo.py) so they stay in sync with the
+real popup design.
+
+| File | Size | Purpose |
+|---|---|---|
+| `promo-small-440x280.png`              | 440 × 280   | CWS small promo tile |
+| `promo-large-1400x560.png`             | 1400 × 560  | CWS marquee / large promo tile |
+| `screenshot-1-hero-1280x800.png`       | 1280 × 800  | Hero: popup over a forex chart |
+| `screenshot-2-settings-1280x800.png`   | 1280 × 800  | Settings panel (filters, text size, opacity) |
+| `screenshot-3-hover-1280x800.png`      | 1280 × 800  | Hover state — actions reveal |
+
+Regenerate with `python3 promo/gen_promo.py` (requires PIL and the Inter
+TTF files at `/tmp/inter_ttf/extras/ttf/`).
+
 ## Building the Chrome Web Store package
 
 ```bash
