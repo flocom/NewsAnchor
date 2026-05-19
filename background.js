@@ -31,17 +31,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 // Toggling the floating popup directly when the user clicks the toolbar icon.
+// Never opens a new tab — if the active tab has no NewsAnchor content script
+// (ie not a tradingview.com page), we simply flip the persisted state so the
+// popup reflects the new state whenever the user lands on a TV tab.
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab?.id) return;
-  const url = tab.url || "";
-  if (!/^https:\/\/[^/]*tradingview\.com\//.test(url)) {
-    chrome.tabs.create({ url: "https://www.tradingview.com/chart/" });
-    return;
-  }
   try {
     await chrome.tabs.sendMessage(tab.id, { type: "newsanchor:toggle" });
   } catch {
-    // Content script not yet injected (eg right after install) → fall back to storage flip.
     const data = await chrome.storage.local.get(STATE_KEY);
     const cur = data[STATE_KEY] || {};
     await chrome.storage.local.set({ [STATE_KEY]: { ...cur, hidden: !cur.hidden } });

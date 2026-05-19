@@ -32,7 +32,8 @@
   ],
   "permissions": [
     "storage",
-    "alarms"
+    "alarms",
+    "activeTab"
   ],
   "host_permissions": [
     "https://nfs.faireconomy.media/*"
