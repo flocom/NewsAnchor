@@ -12,7 +12,7 @@ your screen — forex pairs, indices, commodities, crypto and stocks.
 
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue?style=flat-square)](https://developer.chrome.com/docs/extensions/mv3/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-![Version](https://img.shields.io/badge/version-0.3.0-orange?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.3.1-orange?style=flat-square)
 
 </div>
 
@@ -23,10 +23,15 @@ your screen — forex pairs, indices, commodities, crypto and stocks.
 - **Asset-aware filtering** — the popup resolves the TradingView ticker on the
   page and only shows events that move *that* market:
   - Forex pairs → both legs (`EURUSD` → EUR + USD)
-  - Indices → country currency (`DAX` → EUR, `NAS100` → USD, `JP225` → JPY)
-  - Commodities → USD (`XAUUSD`, `USOIL`, …)
-  - Crypto → USD macro (`BTCUSDT`, `ETHUSD`, …)
-  - Stocks → exchange currency (`NASDAQ:AAPL` → USD, `TSX:SHOP` → CAD)
+  - Currency indices → the index's base currency (`DXY` → USD, `EXY` → EUR,
+    `JXY` → JPY, `BXY` → GBP, `CXY` → CAD, `AXY` → AUD, `SXY` → CHF,
+    `ZXY` → NZD)
+  - Stock indices → country currency (`DAX` → EUR, `NAS100` → USD,
+    `JP225` → JPY, `HSI` → CNY, `BEL20` → EUR, `TOPIX` → JPY)
+  - Commodities → USD (`XAUUSD`, `USOIL`, `XAGUSD`, `NATGAS`, …)
+  - Crypto → USD macro (`BTCUSDT`, `ETHUSD`, `SOLUSDT`, …)
+  - Stocks → exchange currency (`NASDAQ:AAPL` → USD, `TSX:SHOP` → CAD,
+    `LSE:HSBA` → GBP, `XETR:SAP` → EUR)
 - **Live ticker tracking** — patched `history.pushState`, a title observer,
   a legend `MutationObserver` and a 1 Hz fallback keep the popup in sync
   even when you switch symbols via the watchlist.
@@ -65,7 +70,7 @@ your screen — forex pairs, indices, commodities, crypto and stocks.
 
 ### From a release asset
 
-Download `newsanchor-v0.3.0.zip` from the
+Download `newsanchor-v0.3.1.zip` from the
 [Releases page](https://github.com/flocom/NewsAnchor/releases), unzip, then
 follow steps 2–4 above.
 
@@ -139,7 +144,7 @@ No build step. Edit the files, click **Reload** in `chrome://extensions/`.
 ## Building the Chrome Web Store package
 
 ```bash
-zip -r dist/newsanchor-v0.3.0.zip \
+zip -r dist/newsanchor-v0.3.1.zip \
   manifest.json background.js content fonts icons LICENSE \
   -x "*.DS_Store"
 ```

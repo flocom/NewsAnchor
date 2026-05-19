@@ -8,10 +8,13 @@
   if (window.__newsanchorMounted) return;
   window.__newsanchorMounted = true;
 
+  // ---- Constants -------------------------------------------------------------
+
   const STATE_KEY = "ui_state";
   const FILTER_KEY = "impact_filter";
   const EVENTS_KEY = "ff_events";
   const META_KEY = "ff_meta";
+
   const DEFAULT_STATE = {
     x: null, y: null, w: 280, h: 360,
     minimized: false, hidden: false,
@@ -19,6 +22,34 @@
   };
   const DEFAULT_FILTER = { high: true, medium: true, low: false, holiday: false };
   const TYPO_SIZES = ["s", "m", "l"];
+
+  const MIN_W = 240, MIN_H = 160;
+  const POLL_INTERVAL_MS = 1000;
+  const PAST_GRACE_MS = 60 * 60 * 1000;        // keep events for 1 h after their start
+  const STALE_AFTER_MS = 4 * 60 * 60 * 1000;   // trigger a manual refresh if cache > 4 h
+  const TOAST_TTL_MS = 1800;
+  const DAY_MS = 86_400_000;
+
+  const LEGEND_SELECTOR = [
+    '[data-name="legend-source-title"]',
+    '[data-name="legend-series-item"] [data-name*="title"]',
+    '[class*="mainTitle"]',
+  ].join(",");
+  const SYMBOL_RE = /([A-Z][A-Z0-9_]{1,10}:[A-Z0-9._]{2,15}|[A-Z][A-Z0-9._]{2,11})/;
+  const SKIP_TAGS = new Set(["SVG", "PATH", "USE", "IMG", "CIRCLE", "RECT", "G", "DEFS"]);
+  const HTML_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+
+  // Browser TZ abbreviation — surfaced in the refresh button tooltip.
+  const TZ_ABBR = (() => {
+    try {
+      const part = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+        .formatToParts(new Date())
+        .find((p) => p.type === "timeZoneName");
+      return part ? part.value : "";
+    } catch { return ""; }
+  })();
+
+  // ---- State -----------------------------------------------------------------
 
   let state = { ...DEFAULT_STATE };
   let filter = { ...DEFAULT_FILTER };
@@ -29,18 +60,13 @@
   let currencies = new Set();
   let root = null;
   let legendObserver = null;
-
-  // The browser's local TZ abbreviation (used in the footer for clarity).
-  const TZ_ABBR = (() => {
-    try {
-      const part = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
-        .formatToParts(new Date())
-        .find((p) => p.type === "timeZoneName");
-      return part ? part.value : "";
-    } catch { return ""; }
-  })();
+  let toastTimer = 0;
+  // Cached element refs — populated by buildPopup, used in hot render paths.
+  const els = {};
 
   init();
+
+  // ---- Init ------------------------------------------------------------------
 
   async function init() {
     loadFonts();
@@ -61,32 +87,25 @@
 
     watchSymbol();
 
-    if (!events.length || !meta || Date.now() - meta.fetchedAt > 4 * 3600 * 1000) {
+    if (!events.length || !meta || Date.now() - meta.fetchedAt > STALE_AFTER_MS) {
       refresh();
     }
   }
 
   function loadFonts() {
     if (!("FontFace" in window) || !chrome.runtime?.getURL) return;
-    const faces = [
-      ["400", "fonts/Inter-Regular.woff2"],
-      ["600", "fonts/Inter-SemiBold.woff2"],
-    ];
-    Promise.all(
-      faces.map(([weight, path]) => {
-        const url = chrome.runtime.getURL(path);
-        const ff = new FontFace("NewsAnchorInter", `url(${url}) format("woff2")`, {
-          weight, style: "normal", display: "swap",
-        });
-        return ff.load().then((loaded) => document.fonts.add(loaded)).catch(() => null);
-      })
-    );
+    for (const [weight, path] of [["400", "fonts/Inter-Regular.woff2"], ["600", "fonts/Inter-SemiBold.woff2"]]) {
+      const ff = new FontFace("NewsAnchorInter", `url(${chrome.runtime.getURL(path)}) format("woff2")`, {
+        weight, style: "normal", display: "swap",
+      });
+      ff.load().then((loaded) => document.fonts.add(loaded)).catch(() => null);
+    }
   }
 
-  function onMessage(msg, _sender, _sendResponse) {
-    if (msg?.type === "newsanchor:toggle") {
-      saveState({ hidden: !state.hidden });
-    }
+  // ---- Message + storage plumbing -------------------------------------------
+
+  function onMessage(msg) {
+    if (msg?.type === "newsanchor:toggle") saveState({ hidden: !state.hidden });
   }
 
   function onStorageChanged(changes, area) {
@@ -114,51 +133,38 @@
   // ---- Symbol detection ------------------------------------------------------
 
   function watchSymbol() {
-    const tick = () => {
-      if (document.hidden) return;
-      const raw = detectSymbol();
-      const result = resolveWithRecovery(raw);
-      const effective = result?.ticker || raw;
-      if (effective === currentSymbol) return;
-      currentSymbol = effective;
-      resolved = result;
-      currencies = new Set(resolved?.currencies || []);
-      renderEvents();
-      applyState();
-      attachLegendObserver();
-    };
-
-    tick();
+    updateSymbol();
 
     const origPush = history.pushState;
     const origReplace = history.replaceState;
-    history.pushState = function () { origPush.apply(this, arguments); queueMicrotask(tick); };
-    history.replaceState = function () { origReplace.apply(this, arguments); queueMicrotask(tick); };
-    window.addEventListener("popstate", tick);
+    history.pushState = function () { origPush.apply(this, arguments); queueMicrotask(updateSymbol); };
+    history.replaceState = function () { origReplace.apply(this, arguments); queueMicrotask(updateSymbol); };
+    window.addEventListener("popstate", updateSymbol);
 
     const titleEl = document.querySelector("title");
-    if (titleEl) new MutationObserver(tick).observe(titleEl, { childList: true });
+    if (titleEl) new MutationObserver(updateSymbol).observe(titleEl, { childList: true });
 
     attachLegendObserver();
-    // 1 Hz fallback. Cheap (5 DOM queries) and reattaches the legend observer
-    // when TradingView replaces the header on a symbol switch from the watchlist.
+
+    // 1 Hz fallback. Cheap (a few DOM queries) and reattaches the legend observer
+    // when TradingView replaces the header on a watchlist switch.
     setInterval(() => {
       if (document.hidden) return;
       if (!legendObserver?._target?.isConnected) attachLegendObserver();
-      tick();
-    }, 1000);
+      updateSymbol();
+    }, POLL_INTERVAL_MS);
   }
 
   function attachLegendObserver() {
     const legend = document.querySelector(LEGEND_SELECTOR);
     if (!legend || legendObserver?._target === legend) return;
     legendObserver?.disconnect();
-    legendObserver = new MutationObserver(updateFromDom);
+    legendObserver = new MutationObserver(updateSymbol);
     legendObserver._target = legend;
     legendObserver.observe(legend, { childList: true, subtree: true, characterData: true });
   }
 
-  function updateFromDom() {
+  function updateSymbol() {
     if (document.hidden) return;
     const raw = detectSymbol();
     const result = resolveWithRecovery(raw);
@@ -172,8 +178,8 @@
   }
 
   // Resolve a raw ticker string, with a fallback when TradingView's DOM prepends
-  // a single-letter badge ("EGBPAUD" → "GBPAUD"). Triggers only when removing
-  // the leading char produces a strictly cleaner classification.
+  // a decorative character to the ticker ("EGBPAUD" → "GBPAUD"). Only triggers
+  // when stripping the leading char produces a strictly cleaner classification.
   function resolveWithRecovery(raw) {
     if (!raw) return null;
     const orig = window.NewsAnchorSymbol.resolve(raw);
@@ -181,22 +187,13 @@
     const norm = raw.replace(/[^A-Z0-9]/gi, "").toUpperCase();
     if (norm.length !== 7) return orig;
     const stripped = window.NewsAnchorSymbol.resolve(norm.slice(1));
-    // Stripping reveals a clean 6-char forex pair → strong signal.
     if (stripped.type === "forex" && stripped.ticker.length === 6) return stripped;
-    // Stripping promotes an unknown stock to a recognized asset type.
     if (orig.type === "stock" && stripped.type !== "stock") return stripped;
     return orig;
   }
 
-  const LEGEND_SELECTOR = [
-    '[data-name="legend-source-title"]',
-    '[data-name="legend-series-item"] [data-name*="title"]',
-    '[class*="mainTitle"]',
-  ].join(",");
-  const SYMBOL_RE = /([A-Z][A-Z0-9_]{1,10}:[A-Z0-9._]{2,15}|[A-Z][A-Z0-9._]{2,11})/;
-
   function detectSymbol() {
-    // 1) URL — the most reliable when present.
+    // 1) URL — most reliable when present.
     try {
       const u = new URL(location.href);
       const fromQuery = u.searchParams.get("symbol");
@@ -205,14 +202,14 @@
       if (pathSym) return decodeURIComponent(pathSym[1]).replace(/-/g, ":");
     } catch {}
 
-    // 2) Dedicated attributes (cleaner than scraping text).
+    // 2) Dedicated TradingView attributes (cleaner than scraping legend text).
     const shortAttr = document.querySelector("[data-symbol-short]");
     if (shortAttr) {
       const v = shortAttr.getAttribute("data-symbol-short");
       if (v && v.length < 40) return v;
     }
 
-    // 3) Legend element. Strip icons (SVG / aria-hidden) and extract a clean token.
+    // 3) Legend element, with icon nodes (svg/aria-hidden) stripped.
     const legend = document.querySelector(LEGEND_SELECTOR);
     const txt = visibleText(legend);
     if (txt) {
@@ -221,16 +218,15 @@
       if (txt.length < 30) return txt;
     }
 
-    // 4) Generic data-symbol (less reliable: watchlist rows also expose it).
+    // 4) Generic data-symbol — less reliable (watchlist rows expose it too).
     const dataSym = document.querySelector("[data-symbol]");
     if (dataSym) return dataSym.getAttribute("data-symbol");
 
-    // 5) document.title (eg "AAPL Chart Image — TradingView").
+    // 5) document.title.
     const titleMatch = document.title.match(SYMBOL_RE);
     return titleMatch ? titleMatch[1] : null;
   }
 
-  const SKIP_TAGS = new Set(["SVG", "PATH", "USE", "IMG", "CIRCLE", "RECT", "G", "DEFS"]);
   function visibleText(el) {
     if (!el) return "";
     const parts = [];
@@ -250,29 +246,28 @@
   // ---- Data refresh ----------------------------------------------------------
 
   async function refresh() {
-    const btn = root?.querySelector('.newsanchor-btn[data-action="refresh"]');
-    btn?.classList.add("is-loading");
+    els.refresh?.classList.add("is-loading");
     const resp = await sendMessage({ type: "newsanchor:refresh" });
-    btn?.classList.remove("is-loading");
+    els.refresh?.classList.remove("is-loading");
     if (!resp) return;
     if (resp.ok && resp.cached) showToast("Calendar up to date");
     else if (!resp.ok) showToast("Calendar unavailable");
-    else renderFooter(); // refresh tooltip
+    else renderFooter();
   }
 
-  let toastTimer = 0;
   function showToast(msg) {
     if (!root) return;
-    let toast = root.querySelector(".newsanchor-toast");
+    let toast = els.toast;
     if (!toast) {
       toast = document.createElement("div");
       toast.className = "newsanchor-toast";
       root.appendChild(toast);
+      els.toast = toast;
     }
     toast.textContent = msg;
     toast.classList.add("is-visible");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 1800);
+    toastTimer = setTimeout(() => toast.classList.remove("is-visible"), TOAST_TTL_MS);
   }
 
   // ---- DOM construction ------------------------------------------------------
@@ -319,62 +314,70 @@
     `;
     (document.body || document.documentElement).appendChild(root);
 
-    root.querySelector(".newsanchor-actions").addEventListener("click", (e) => {
-      const btn = e.target.closest(".newsanchor-btn");
-      if (!btn) return;
-      e.stopPropagation();
-      switch (btn.getAttribute("data-action")) {
-        case "close":    saveState({ hidden: true }); break;
-        case "refresh":  refresh(); break;
-        case "settings": toggleSettings(); break;
-      }
+    // One-time element cache for the hot render paths.
+    const $ = (sel) => root.querySelector(sel);
+    Object.assign(els, {
+      drag:     $("[data-drag-handle]"),
+      resize:   $("[data-resize-handle]"),
+      actions:  $(".newsanchor-actions"),
+      settings: $(".newsanchor-settings"),
+      events:   $(".newsanchor-events"),
+      empty:    $(".newsanchor-empty"),
+      refresh:  $('.newsanchor-btn[data-action="refresh"]'),
+      slider:   $("[data-opacity-slider]"),
+      opacityValue: $("[data-opacity-value]"),
+      pills:    root.querySelectorAll(".newsanchor-pill[data-impact]"),
+      segBtns:  root.querySelectorAll(".seg-btn[data-typo]"),
+      toast:    null, // lazily created on first showToast
     });
-    // Double-click the top drag strip to collapse to a minimal handle.
-    root.querySelector(".newsanchor-drag").addEventListener("dblclick", () => {
-      saveState({ minimized: !state.minimized });
-    });
+
+    els.actions.addEventListener("click", onActionClick);
+    els.drag.addEventListener("dblclick", () => saveState({ minimized: !state.minimized }));
+    els.settings.addEventListener("click", onSettingsClick);
+    els.slider.addEventListener("input", (e) => saveState({ opacity: clamp(parseInt(e.target.value, 10), 40, 100) }));
+
+    enableGesture(els.drag, "drag");
+    enableGesture(els.resize, "resize");
 
     syncSettings();
-    root.querySelector(".newsanchor-settings").addEventListener("click", (e) => {
-      const pill = e.target.closest(".newsanchor-pill[data-impact]");
-      if (pill) {
-        e.stopPropagation();
-        const key = pill.getAttribute("data-impact");
-        filter = { ...filter, [key]: !filter[key] };
-        chrome.storage.local.set({ [FILTER_KEY]: filter });
-        syncSettings();
-        renderEvents();
-        return;
-      }
-      const seg = e.target.closest(".seg-btn[data-typo]");
-      if (seg) {
-        e.stopPropagation();
-        saveState({ typoSize: seg.getAttribute("data-typo") });
-        return;
-      }
-    });
-    root.querySelector("[data-opacity-slider]").addEventListener("input", (e) => {
-      const v = parseInt(e.target.value, 10);
-      saveState({ opacity: clamp(v, 40, 100) });
-    });
+  }
 
-    enableDrag(root, root.querySelector("[data-drag-handle]"));
-    enableResize(root, root.querySelector("[data-resize-handle]"));
+  function onActionClick(e) {
+    const btn = e.target.closest(".newsanchor-btn");
+    if (!btn) return;
+    e.stopPropagation();
+    switch (btn.getAttribute("data-action")) {
+      case "close":    saveState({ hidden: true }); break;
+      case "refresh":  refresh(); break;
+      case "settings": els.settings.classList.toggle("is-collapsed"); break;
+    }
+  }
+
+  function onSettingsClick(e) {
+    const pill = e.target.closest(".newsanchor-pill[data-impact]");
+    if (pill) {
+      e.stopPropagation();
+      const key = pill.getAttribute("data-impact");
+      filter = { ...filter, [key]: !filter[key] };
+      chrome.storage.local.set({ [FILTER_KEY]: filter });
+      syncSettings();
+      renderEvents();
+      return;
+    }
+    const seg = e.target.closest(".seg-btn[data-typo]");
+    if (seg) {
+      e.stopPropagation();
+      saveState({ typoSize: seg.getAttribute("data-typo") });
+    }
   }
 
   function syncSettings() {
     if (!root) return;
-    root.querySelectorAll(".newsanchor-pill[data-impact]").forEach((pill) => {
-      pill.classList.toggle("is-active", !!filter[pill.getAttribute("data-impact")]);
-    });
+    els.pills.forEach((p) => p.classList.toggle("is-active", !!filter[p.getAttribute("data-impact")]));
     const typo = TYPO_SIZES.includes(state.typoSize) ? state.typoSize : "m";
-    root.querySelectorAll(".seg-btn[data-typo]").forEach((b) => {
-      b.classList.toggle("is-active", b.getAttribute("data-typo") === typo);
-    });
-    const slider = root.querySelector("[data-opacity-slider]");
-    if (slider) slider.value = String(state.opacity ?? 100);
-    const valEl = root.querySelector("[data-opacity-value]");
-    if (valEl) valEl.textContent = `${state.opacity ?? 100}%`;
+    els.segBtns.forEach((b) => b.classList.toggle("is-active", b.getAttribute("data-typo") === typo));
+    if (els.slider) els.slider.value = String(state.opacity ?? 100);
+    if (els.opacityValue) els.opacityValue.textContent = `${state.opacity ?? 100}%`;
   }
 
   function applyState() {
@@ -397,12 +400,9 @@
     root.classList.toggle("is-minimized", !!state.minimized);
 
     root.style.setProperty("--na-alpha", ((state.opacity ?? 100) / 100).toString());
-    TYPO_SIZES.forEach((s) => root.classList.remove(`is-typo-${s}`));
     const typo = TYPO_SIZES.includes(state.typoSize) ? state.typoSize : "m";
-    root.classList.add(`is-typo-${typo}`);
+    for (const s of TYPO_SIZES) root.classList.toggle(`is-typo-${s}`, s === typo);
   }
-
-  function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
 
   function onWindowResize() {
     if (!root || state.x == null || state.y == null) return;
@@ -411,49 +411,48 @@
   }
 
   // ---- Rendering -------------------------------------------------------------
-  // No header rendering: the popup is anchored to a TradingView chart that
-  // already shows the symbol, so we don't echo it. The current ticker is still
-  // tracked in `currentSymbol` to drive event filtering and popup visibility.
 
   function renderEvents() {
     if (!root) return;
-    const list = root.querySelector(".newsanchor-events");
-    const empty = root.querySelector(".newsanchor-empty");
-
     if (!resolved) {
-      list.textContent = "";
-      empty.hidden = false;
-      empty.textContent = "No ticker detected";
+      els.events.textContent = "";
+      els.empty.hidden = false;
+      els.empty.textContent = "No ticker detected";
       return;
     }
 
-    const cutoff = Date.now() - 60 * 60 * 1000;
-    const filtered = events.filter((e) =>
-      (e.country === "All" || currencies.has(e.country)) &&
-      filter[e.impact] &&
-      (!e.ts || e.ts >= cutoff)
-    );
+    const cutoff = Date.now() - PAST_GRACE_MS;
+    const filtered = [];
+    for (const e of events) {
+      if (e.country !== "All" && !currencies.has(e.country)) continue;
+      if (!filter[e.impact]) continue;
+      if (e.ts && e.ts < cutoff) continue;
+      filtered.push(e);
+    }
 
     if (!filtered.length) {
-      list.textContent = "";
-      empty.hidden = false;
-      empty.textContent = events.length ? "No upcoming events" : "Loading…";
+      els.events.textContent = "";
+      els.empty.hidden = false;
+      els.empty.textContent = events.length ? "No upcoming events" : "Loading…";
       return;
     }
-    empty.hidden = true;
-    list.innerHTML = renderGroups(filtered);
+    els.empty.hidden = true;
+    els.events.innerHTML = renderGroups(filtered);
   }
 
   function renderGroups(filtered) {
     const groups = new Map();
     for (const ev of filtered) {
       const key = ev.ts ? dayKey(ev.ts) : (ev.date || "—");
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(ev);
+      let bucket = groups.get(key);
+      if (!bucket) groups.set(key, (bucket = []));
+      bucket.push(ev);
     }
-    const today = dayKey(Date.now());
-    const tomorrow = dayKey(Date.now() + 86400_000);
-    return [...groups.entries()].map(([key, evs]) => {
+    const now = Date.now();
+    const today = dayKey(now);
+    const tomorrow = dayKey(now + DAY_MS);
+    const out = [];
+    for (const [key, evs] of groups) {
       const sample = evs[0]?.ts;
       let label, cls = "";
       if (key === today) { label = "today"; cls = "is-today"; }
@@ -465,13 +464,14 @@
       } else {
         label = evs[0]?.date || "—";
       }
-      return `
-        <li class="newsanchor-day ${cls}">
-          <div class="day-label">${escapeHtml(label)}</div>
-          <ul class="day-events">${evs.map(renderEvent).join("")}</ul>
-        </li>
-      `;
-    }).join("");
+      out.push(
+        `<li class="newsanchor-day ${cls}">` +
+        `<div class="day-label">${escapeHtml(label)}</div>` +
+        `<ul class="day-events">${evs.map(renderEvent).join("")}</ul>` +
+        `</li>`
+      );
+    }
+    return out.join("");
   }
 
   function dayKey(ts) {
@@ -487,18 +487,17 @@
       : (ev.time || "—");
     const impact = ev.impact || "low";
     const values = formatValues(ev.previous, ev.forecast);
-    const body = `
-      <div class="ev-time">${escapeHtml(when)}</div>
-      <div class="ev-content">
-        <div class="ev-row">
-          <span class="dot dot-${escapeHtml(impact)}"></span>
-          <span class="ev-country">${escapeHtml(ev.country)}</span>
-          <span class="ev-title">${escapeHtml(ev.title)}</span>
-          <span class="ev-ext" aria-hidden="true">↗</span>
-        </div>
-        ${values ? `<div class="ev-values">${values}</div>` : ""}
-      </div>
-    `;
+    const body =
+      `<div class="ev-time">${escapeHtml(when)}</div>` +
+      `<div class="ev-content">` +
+        `<div class="ev-row">` +
+          `<span class="dot dot-${escapeHtml(impact)}"></span>` +
+          `<span class="ev-country">${escapeHtml(ev.country)}</span>` +
+          `<span class="ev-title">${escapeHtml(ev.title)}</span>` +
+          `<span class="ev-ext" aria-hidden="true">↗</span>` +
+        `</div>` +
+        (values ? `<div class="ev-values">${values}</div>` : "") +
+      `</div>`;
     const inner = ev.url
       ? `<a class="ev-link" href="${escapeHtml(ev.url)}" target="_blank" rel="noopener" title="View on Forex Factory">${body}</a>`
       : `<div class="ev-link is-static">${body}</div>`;
@@ -514,24 +513,18 @@
     return "";
   }
 
-  // No permanent status bar — the refresh button's tooltip carries the last-fetch
-  // time so we never spend pixels on idle status.
+  // No permanent status bar — the refresh button tooltip carries the last-fetch
+  // time so the idle popup spends zero pixels on status.
   function renderFooter() {
-    if (!root) return;
-    const btn = root.querySelector('.newsanchor-btn[data-action="refresh"]');
-    if (!btn) return;
-    if (!meta) { btn.title = "Refresh"; return; }
+    if (!els.refresh) return;
+    if (!meta) { els.refresh.title = "Refresh"; return; }
     const time = new Date(meta.fetchedAt).toLocaleTimeString("en-GB", {
       hour: "2-digit", minute: "2-digit", hour12: false,
     });
-    btn.title = `Refresh — last updated ${time}${TZ_ABBR ? " " + TZ_ABBR : ""}`;
+    els.refresh.title = `Refresh — last updated ${time}${TZ_ABBR ? " " + TZ_ABBR : ""}`;
   }
 
-  // ---- Actions ---------------------------------------------------------------
-
-  function toggleSettings() {
-    root.querySelector(".newsanchor-settings").classList.toggle("is-collapsed");
-  }
+  // ---- Persistence -----------------------------------------------------------
 
   function saveState(patch) {
     state = { ...state, ...patch };
@@ -539,85 +532,70 @@
     applyState();
   }
 
-  // ---- Drag & resize ---------------------------------------------------------
+  // ---- Drag & resize (single helper, rAF-throttled, lazy listeners) ---------
 
-  function enableDrag(el, handle) {
-    let startX, startY, origX, origY, raf = 0, lastEvent = null;
+  function enableGesture(handle, mode) {
+    let raf = 0, lastEvent = null;
+    let startX, startY, origA, origB; // origA/B: left/top for drag, width/height for resize
+
+    const apply = () => {
+      raf = 0;
+      if (!lastEvent || !root) return;
+      const dx = lastEvent.clientX - startX;
+      const dy = lastEvent.clientY - startY;
+      if (mode === "drag") {
+        root.style.left = clampX(origA + dx) + "px";
+        root.style.top = clampY(origB + dy) + "px";
+        root.style.right = "auto";
+      } else {
+        root.style.width = Math.max(MIN_W, origA + dx) + "px";
+        root.style.height = Math.max(MIN_H, origB + dy) + "px";
+      }
+      lastEvent = null;
+    };
 
     const onMove = (e) => {
       lastEvent = e;
-      if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        if (!lastEvent) return;
-        el.style.left = clampX(origX + (lastEvent.clientX - startX)) + "px";
-        el.style.top = clampY(origY + (lastEvent.clientY - startY)) + "px";
-        el.style.right = "auto";
-        lastEvent = null;
-      });
+      if (!raf) raf = requestAnimationFrame(apply);
     };
+
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
-      el.classList.remove("is-dragging");
-      const rect = el.getBoundingClientRect();
-      saveState({ x: Math.round(rect.left), y: Math.round(rect.top) });
+      const rect = root.getBoundingClientRect();
+      if (mode === "drag") {
+        root.classList.remove("is-dragging");
+        saveState({ x: Math.round(rect.left), y: Math.round(rect.top) });
+      } else {
+        saveState({ w: Math.round(rect.width), h: Math.round(rect.height) });
+      }
     };
+
     handle.addEventListener("mousedown", (e) => {
-      if (e.target.closest(".newsanchor-actions")) return;
-      const rect = el.getBoundingClientRect();
+      if (mode === "drag" && e.target.closest(".newsanchor-actions")) return;
+      const rect = root.getBoundingClientRect();
       startX = e.clientX; startY = e.clientY;
-      origX = rect.left;  origY = rect.top;
-      el.classList.add("is-dragging");
+      if (mode === "drag") { origA = rect.left; origB = rect.top; root.classList.add("is-dragging"); }
+      else                  { origA = rect.width; origB = rect.height; }
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
       e.preventDefault();
-    });
-  }
-
-  function enableResize(el, handle) {
-    let startX, startY, startW, startH, raf = 0, lastEvent = null;
-
-    const onMove = (e) => {
-      lastEvent = e;
-      if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        if (!lastEvent) return;
-        el.style.width = Math.max(240, startW + (lastEvent.clientX - startX)) + "px";
-        el.style.height = Math.max(160, startH + (lastEvent.clientY - startY)) + "px";
-        lastEvent = null;
-      });
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      if (raf) cancelAnimationFrame(raf);
-      raf = 0;
-      const rect = el.getBoundingClientRect();
-      saveState({ w: Math.round(rect.width), h: Math.round(rect.height) });
-    };
-    handle.addEventListener("mousedown", (e) => {
-      const rect = el.getBoundingClientRect();
-      startX = e.clientX; startY = e.clientY;
-      startW = rect.width; startH = rect.height;
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
-      e.preventDefault();
-      e.stopPropagation();
+      if (mode === "resize") e.stopPropagation();
     });
   }
 
   function clampX(x) { return Math.min(Math.max(0, x), Math.max(0, window.innerWidth - 200)); }
   function clampY(y) { return Math.min(Math.max(0, y), Math.max(0, window.innerHeight - 80)); }
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
   // ---- Helpers ---------------------------------------------------------------
 
   function chromeGet(keys) {
     return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
   }
+
   function sendMessage(msg) {
     return new Promise((resolve) => {
       try {
@@ -628,7 +606,7 @@
       } catch { resolve(null); }
     });
   }
-  const HTML_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+
   function escapeHtml(s) {
     return String(s ?? "").replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
   }

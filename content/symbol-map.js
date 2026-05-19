@@ -4,6 +4,9 @@
 (function () {
   "use strict";
 
+  // ISO 4217 codes we recognise as "FX". The Forex Factory feed only emits a
+  // subset (FF_TRACKED below), but knowing the broader set helps us classify
+  // pairs even when no events are available.
   const FX_CODES = new Set([
     "USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF",
     "CNY", "CNH", "HKD", "SGD", "SEK", "NOK", "DKK", "MXN",
@@ -11,71 +14,97 @@
     "KRW", "ILS", "THB",
   ]);
 
-  // Forex Factory feed only emits a subset; cross-reference at filter time.
   const FF_TRACKED = new Set([
     "USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF", "CNY",
   ]);
 
+  // Stock / market-index → currency. Currency indices (DXY, EXY…) are also
+  // here since they're treated like indices from the calendar's point of view.
   const INDEX_MAP = {
-    // US
+    // ---- Currency indices ------------------------------------------------
+    DXY: ["USD"], USDX: ["USD"], USDIDX: ["USD"], USDIX: ["USD"],
+    USDOLLAR: ["USD"], DOLLARINDEX: ["USD"], USDINDEX: ["USD"],
+    EXY: ["EUR"], EURX: ["EUR"], EURIDX: ["EUR"], EURINDEX: ["EUR"],
+    JXY: ["JPY"], JPYX: ["JPY"], JPYIDX: ["JPY"], JPYINDEX: ["JPY"],
+    BXY: ["GBP"], GBPX: ["GBP"], GBPIDX: ["GBP"], GBPINDEX: ["GBP"],
+    CXY: ["CAD"], CADX: ["CAD"], CADIDX: ["CAD"], CADINDEX: ["CAD"],
+    AXY: ["AUD"], AUDX: ["AUD"], AUDIDX: ["AUD"], AUDINDEX: ["AUD"],
+    SXY: ["CHF"], CHFX: ["CHF"], CHFIDX: ["CHF"], CHFINDEX: ["CHF"],
+    ZXY: ["NZD"], NZDX: ["NZD"], NZDIDX: ["NZD"], NZDINDEX: ["NZD"],
+
+    // ---- US equity indices ----------------------------------------------
     SPX: ["USD"], SPX500: ["USD"], US500: ["USD"], SP500: ["USD"], SPY: ["USD"],
     ES: ["USD"], MES: ["USD"], "ES1!": ["USD"], "MES1!": ["USD"],
-    NAS100: ["USD"], NDX: ["USD"], NQ: ["USD"], "NQ1!": ["USD"], QQQ: ["USD"], USTEC: ["USD"],
-    DJI: ["USD"], DJ30: ["USD"], US30: ["USD"], YM: ["USD"], "YM1!": ["USD"], DIA: ["USD"],
+    NAS100: ["USD"], NDX: ["USD"], NQ: ["USD"], "NQ1!": ["USD"], QQQ: ["USD"], USTEC: ["USD"], US100: ["USD"],
+    DJI: ["USD"], DJ30: ["USD"], US30: ["USD"], YM: ["USD"], "YM1!": ["USD"], DIA: ["USD"], DJIA: ["USD"],
     RUT: ["USD"], RUSSELL: ["USD"], US2000: ["USD"], IWM: ["USD"], RTY: ["USD"],
-    VIX: ["USD"],
-    // EU
+    VIX: ["USD"], VXX: ["USD"], MOVE: ["USD"],
+
+    // ---- Europe ---------------------------------------------------------
     DAX: ["EUR"], GER40: ["EUR"], DEU40: ["EUR"], GER30: ["EUR"], GDAXI: ["EUR"], DE40: ["EUR"], DE30: ["EUR"],
     CAC: ["EUR"], CAC40: ["EUR"], FR40: ["EUR"], FCHI: ["EUR"], FRA40: ["EUR"],
-    STOXX50: ["EUR"], EU50: ["EUR"], SX5E: ["EUR"], "STOXX50E": ["EUR"],
-    IBEX: ["EUR"], ESP35: ["EUR"], SPA35: ["EUR"],
+    STOXX50: ["EUR"], EU50: ["EUR"], SX5E: ["EUR"], STOXX50E: ["EUR"], EUSTX50: ["EUR"],
+    IBEX: ["EUR"], ESP35: ["EUR"], SPA35: ["EUR"], IBX35: ["EUR"],
     AEX: ["EUR"], NL25: ["EUR"], NED25: ["EUR"],
     MIB: ["EUR"], FTSEMIB: ["EUR"], ITA40: ["EUR"], IT40: ["EUR"],
-    // UK
-    FTSE: ["GBP"], FTSE100: ["GBP"], UK100: ["GBP"], UKX: ["GBP"],
-    // CH
-    SMI: ["CHF"], SWI20: ["CHF"], SSMI: ["CHF"],
-    // JP
-    JP225: ["JPY"], NIKKEI: ["JPY"], NI225: ["JPY"], N225: ["JPY"], "NK225": ["JPY"],
-    // AU
+    BEL20: ["EUR"], BFX: ["EUR"],
+
+    // ---- UK -------------------------------------------------------------
+    FTSE: ["GBP"], FTSE100: ["GBP"], UK100: ["GBP"], UKX: ["GBP"], FTSE250: ["GBP"],
+
+    // ---- Switzerland ----------------------------------------------------
+    SMI: ["CHF"], SWI20: ["CHF"], SSMI: ["CHF"], CH20: ["CHF"],
+
+    // ---- Japan ----------------------------------------------------------
+    JP225: ["JPY"], NIKKEI: ["JPY"], NI225: ["JPY"], N225: ["JPY"], NK225: ["JPY"], TOPIX: ["JPY"],
+
+    // ---- Australia / NZ -------------------------------------------------
     AUS200: ["AUD"], ASX200: ["AUD"], AXJO: ["AUD"], AU200: ["AUD"],
-    // CA
-    TSX: ["CAD"], TSX60: ["CAD"], "S&P/TSX": ["CAD"], GSPTSE: ["CAD"],
-    // HK / CN
+    NZ50: ["NZD"], NZD50: ["NZD"],
+
+    // ---- Canada ---------------------------------------------------------
+    TSX: ["CAD"], TSX60: ["CAD"], "S&P/TSX": ["CAD"], GSPTSE: ["CAD"], TSXCOMP: ["CAD"],
+
+    // ---- China / HK -----------------------------------------------------
     HSI: ["CNY"], HK50: ["CNY"], HSI50: ["CNY"], HKHI: ["CNY"],
     CHINA50: ["CNY"], CSI300: ["CNY"], A50: ["CNY"], FTSECHINAA50: ["CNY"],
-    // NZ
-    NZ50: ["NZD"], NZD50: ["NZD"],
+    HSCEI: ["CNY"], HSTECH: ["CNY"], SSEC: ["CNY"], SZSC: ["CNY"],
   };
 
   const COMMODITY_MAP = {
-    GOLD: ["USD"], XAU: ["USD"], XAUUSD: ["USD"],
-    SILVER: ["USD"], XAG: ["USD"], XAGUSD: ["USD"],
-    PLATINUM: ["USD"], XPT: ["USD"], XPTUSD: ["USD"],
-    PALLADIUM: ["USD"], XPD: ["USD"], XPDUSD: ["USD"],
-    COPPER: ["USD"], HG: ["USD"],
-    USOIL: ["USD"], WTI: ["USD"], WTICOUSD: ["USD"], CL: ["USD"], "CL1!": ["USD"],
+    // Precious metals
+    GOLD: ["USD"], XAU: ["USD"], XAUUSD: ["USD"], GLD: ["USD"], GC: ["USD"],
+    SILVER: ["USD"], XAG: ["USD"], XAGUSD: ["USD"], SLV: ["USD"], SI: ["USD"],
+    PLATINUM: ["USD"], XPT: ["USD"], XPTUSD: ["USD"], PL: ["USD"],
+    PALLADIUM: ["USD"], XPD: ["USD"], XPDUSD: ["USD"], PA: ["USD"],
+    COPPER: ["USD"], HG: ["USD"], XCU: ["USD"],
+    // Energy
+    USOIL: ["USD"], WTI: ["USD"], WTICOUSD: ["USD"], CL: ["USD"], "CL1!": ["USD"], CRUDE: ["USD"],
     UKOIL: ["USD", "GBP"], BRENT: ["USD"], BCO: ["USD"], BCOUSD: ["USD"],
-    NATGAS: ["USD"], NG: ["USD"], "NG1!": ["USD"], XNG: ["USD"],
+    NATGAS: ["USD"], NG: ["USD"], "NG1!": ["USD"], XNG: ["USD"], NGAS: ["USD"],
+    HEATOIL: ["USD"], HO: ["USD"],
+    GASOLINE: ["USD"], RB: ["USD"],
   };
 
-  // Crypto prefixes (asset side) → always USD macro
+  // Known crypto base tickers — extended periodically as the market shifts.
   const CRYPTO_BASES = new Set([
     "BTC", "ETH", "BNB", "XRP", "ADA", "SOL", "DOGE", "DOT", "MATIC", "LINK",
     "AVAX", "LTC", "TRX", "XLM", "ATOM", "NEAR", "ETC", "FIL", "APT", "ARB",
     "OP", "TON", "SHIB", "PEPE", "SUI", "INJ", "TIA", "SEI", "RNDR", "FET",
     "ICP", "HBAR", "VET", "ALGO", "EGLD", "AAVE", "UNI", "MKR", "CRV", "LDO",
     "WIF", "BONK", "JTO", "ORDI", "RUNE", "GALA", "SAND", "MANA", "AXS",
+    "TAO", "ENA", "PYTH", "JUP", "STRK", "POPCAT", "RAY", "FLOKI",
   ]);
 
   const CRYPTO_QUOTES = new Set(["USD", "USDT", "USDC", "USDD", "DAI", "BUSD", "TUSD", "FDUSD", "EUR"]);
+  const STABLE_QUOTES = ["USDT", "USDC", "USDD", "BUSD", "TUSD", "FDUSD"];
 
-  // Exchange prefix → default currency (for stocks).
   const EXCHANGE_COUNTRY = {
     NASDAQ: "USD", NYSE: "USD", AMEX: "USD", ARCA: "USD", BATS: "USD", OTC: "USD",
+    CBOE: "USD", IEX: "USD",
     LSE: "GBP", LSEIOB: "GBP",
     XETR: "EUR", FWB: "EUR", TRADEGATE: "EUR", SWB: "EUR", BER: "EUR",
-    EURONEXT: "EUR", AMEX_FR: "EUR", PAR: "EUR", AMS: "EUR", BRU: "EUR", LIS: "EUR", MIL: "EUR",
+    EURONEXT: "EUR", PAR: "EUR", AMS: "EUR", BRU: "EUR", LIS: "EUR", MIL: "EUR",
     BME: "EUR", BVMF: "BRL",
     TSX: "CAD", TSXV: "CAD", NEO: "CAD", CSE: "CAD",
     ASX: "AUD",
@@ -90,31 +119,40 @@
     TASE: "ILS",
   };
 
+  // Pre-sort commodity keys by length (longest first) so prefix matching
+  // picks the most specific entry — eg "XAUUSDT" matches "XAUUSD" before "XAU".
+  const COMMODITY_KEYS = Object.keys(COMMODITY_MAP).sort((a, b) => b.length - a.length);
+  const STABLE_QUOTES_SET = new Set(STABLE_QUOTES);
+  const NORM_RE = /[._-]/g;
+  const PERP_RE = /\bPERP\b/g;
+
   function stripPrefix(raw) {
-    if (!raw) return "";
     const colon = raw.lastIndexOf(":");
     return colon >= 0 ? raw.slice(colon + 1) : raw;
   }
 
   function normalize(raw) {
     return stripPrefix(String(raw || "").trim().toUpperCase())
-      .replace(/[._-]/g, "")
-      .replace(/\bPERP\b/g, "")
+      .replace(NORM_RE, "")
+      .replace(PERP_RE, "")
       .replace(/!$/, "");
   }
 
   function exchangeOf(raw) {
     const s = String(raw || "");
     const colon = s.indexOf(":");
-    if (colon < 0) return "";
-    return s.slice(0, colon).toUpperCase();
+    return colon < 0 ? "" : s.slice(0, colon).toUpperCase();
+  }
+
+  function dedupe(arr) {
+    return arr.length < 2 ? arr.slice() : Array.from(new Set(arr));
   }
 
   function resolve(rawTicker) {
     const sym = normalize(rawTicker);
     const exch = exchangeOf(rawTicker);
 
-    // 1) Explicit indices / commodities lookup first (some look like forex, eg XAUUSD).
+    // 1) Explicit commodity / index lookup first.
     if (COMMODITY_MAP[sym]) {
       return { type: "commodity", currencies: dedupe(COMMODITY_MAP[sym]), ticker: sym };
     }
@@ -122,11 +160,13 @@
       return { type: "index", currencies: dedupe(INDEX_MAP[sym]), ticker: sym };
     }
 
-    // 2) Crypto pairs: <BASE><QUOTE> where BASE is a known crypto or QUOTE is a stable.
+    // 2) Crypto: known base × stable/USD quote (or 2-5 char base × stable).
     const cryptoHit = matchCrypto(sym);
-    if (cryptoHit) return { type: "crypto", currencies: ["USD"], ticker: sym, base: cryptoHit.base, quote: cryptoHit.quote };
+    if (cryptoHit) {
+      return { type: "crypto", currencies: ["USD"], ticker: sym, base: cryptoHit.base, quote: cryptoHit.quote };
+    }
 
-    // 3) Pure forex: exactly 6 chars, both halves are FX codes.
+    // 3) Pure 6-char forex pair.
     if (sym.length === 6) {
       const a = sym.slice(0, 3);
       const b = sym.slice(3, 6);
@@ -135,27 +175,26 @@
       }
     }
 
-    // 3b) Forex pair with stable quote (eg EURUSDT, GBPUSDC on Binance).
+    // 3b) Forex with a stable quote (eg EURUSDT on Binance).
     const fxStable = matchForexStable(sym);
     if (fxStable) {
       return { type: "forex", currencies: dedupe([fxStable.base, "USD"]), ticker: sym, ...fxStable };
     }
 
     // 4) Commodity-prefixed symbol (eg "GOLDUSD", "XAUUSDT").
-    for (const [k, v] of Object.entries(COMMODITY_MAP)) {
+    for (const k of COMMODITY_KEYS) {
       if (!sym.startsWith(k)) continue;
       const tail = sym.slice(k.length);
-      if (tail === "" || FX_CODES.has(tail) || STABLE_QUOTES.includes(tail)) {
-        return { type: "commodity", currencies: dedupe(v), ticker: sym };
+      if (tail === "" || FX_CODES.has(tail) || STABLE_QUOTES_SET.has(tail)) {
+        return { type: "commodity", currencies: dedupe(COMMODITY_MAP[k]), ticker: sym };
       }
     }
 
-    // 5) Stock: derive from exchange prefix; fallback USD.
+    // 5) Stock fallback — derive currency from the exchange prefix.
     const country = EXCHANGE_COUNTRY[exch] || "USD";
-    return { type: "stock", currencies: dedupe([country]), ticker: sym, exchange: exch };
+    return { type: "stock", currencies: [country], ticker: sym, exchange: exch };
   }
 
-  const STABLE_QUOTES = ["USDT", "USDC", "USDD", "BUSD", "TUSD", "FDUSD"];
   function matchForexStable(sym) {
     for (const q of STABLE_QUOTES) {
       if (!sym.endsWith(q) || sym.length <= q.length) continue;
@@ -173,25 +212,16 @@
       const base = sym.slice(0, sym.length - q.length);
       // FX base with a non-crypto quote → real forex cross, not crypto.
       if (FX_CODES.has(base) && !CRYPTO_BASES.has(base)) return null;
-      // Don't shadow indices/commodities tokenized on Binance & co.
-      if (base in COMMODITY_MAP || base in INDEX_MAP) return null;
+      // Don't shadow tokenized indices / commodities.
+      if (COMMODITY_MAP[base] || INDEX_MAP[base]) return null;
       if (CRYPTO_BASES.has(base) || base.length <= 5) return { base, quote: q };
     }
     return null;
   }
 
-  function dedupe(arr) {
-    return Array.from(new Set(arr));
-  }
-
   function relevantTo(event, resolved) {
-    if (!resolved || !event || !event.country) return false;
-    return resolved.currencies.includes(event.country);
+    return !!(resolved && event && event.country && resolved.currencies.includes(event.country));
   }
 
-  window.NewsAnchorSymbol = {
-    resolve,
-    relevantTo,
-    FF_TRACKED,
-  };
+  window.NewsAnchorSymbol = { resolve, relevantTo, FF_TRACKED };
 })();

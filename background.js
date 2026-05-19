@@ -5,14 +5,24 @@
 const FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml";
 const REFRESH_ALARM = "newsanchor-refresh";
 const REFRESH_PERIOD_MIN = 60;
-const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
+const STALE_AFTER_MS = 6 * 60 * 60 * 1000;   // trigger an opportunistic refresh on startup if cache is older
+const COOLDOWN_MS = 30 * 1000;               // ignore manual refreshes within this window (return cached)
+const RETRY_BACKOFF_MS = 1500;
+
 const STORAGE_KEY = "ff_events";
 const STORAGE_META_KEY = "ff_meta";
 const STATE_KEY = "ui_state";
 
+// Hoisted regexes — `g` flag means we reset .lastIndex before each scan.
+const EVENT_RE = /<event>([\s\S]*?)<\/event>/g;
+const FIELD_RE = /<(\w+)>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/\1>/g;
+const DATE_RE = /^(\d{1,2})-(\d{1,2})-(\d{4})$/;
+const TIME_RE = /^(\d{1,2}):(\d{2})(am|pm)$/i;
+
 let inflight = null;
 let lastSuccessAt = 0;
-const COOLDOWN_MS = 30 * 1000;
+
+// ---- Listeners --------------------------------------------------------------
 
 chrome.runtime.onInstalled.addListener(() => { ensureAlarm(); refreshIfStale(); });
 chrome.runtime.onStartup.addListener(() => { ensureAlarm(); refreshIfStale(); });
@@ -26,14 +36,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     refreshEvents()
       .then((res) => sendResponse({ ok: true, ...res }))
       .catch((e) => sendResponse({ ok: false, error: String(e) }));
-    return true;
+    return true; // async response
   }
 });
 
-// Toggling the floating popup directly when the user clicks the toolbar icon.
-// Never opens a new tab — if the active tab has no NewsAnchor content script
-// (ie not a tradingview.com page), we simply flip the persisted state so the
-// popup reflects the new state whenever the user lands on a TV tab.
+// Toolbar icon click → message the active tab's content script. If we're not on
+// a TradingView tab (no content script), flip the persisted state so the popup
+// reflects the toggle whenever the user lands on a TV tab. Never opens a new tab.
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab?.id) return;
   try {
@@ -45,6 +54,8 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
+// ---- Refresh pipeline -------------------------------------------------------
+
 function ensureAlarm() {
   chrome.alarms.get(REFRESH_ALARM, (a) => {
     if (!a) chrome.alarms.create(REFRESH_ALARM, { periodInMinutes: REFRESH_PERIOD_MIN });
@@ -52,14 +63,13 @@ function ensureAlarm() {
 }
 
 async function refreshIfStale() {
-  const data = await chrome.storage.local.get(STORAGE_META_KEY);
-  const meta = data[STORAGE_META_KEY];
+  const { [STORAGE_META_KEY]: meta } = await chrome.storage.local.get(STORAGE_META_KEY);
   if (!meta || Date.now() - meta.fetchedAt > STALE_AFTER_MS) {
     refreshEvents().catch(() => {});
   }
 }
 
-// Single-flight + cooldown: spammed clicks share the inflight fetch, then return
+// Single-flight + cooldown: spammed callers share the inflight fetch, then get
 // cached data for COOLDOWN_MS so we don't hammer the Forex Factory CDN.
 function refreshEvents() {
   if (inflight) return inflight;
@@ -92,23 +102,27 @@ async function fetchWithRetry() {
       return parseFeed(await res.text());
     } catch (e) {
       lastErr = e;
-      if (attempt === 0) await new Promise((r) => setTimeout(r, 1500));
+      if (attempt === 0) await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
     }
   }
   throw lastErr;
 }
 
+// ---- XML parsing ------------------------------------------------------------
+// DOMParser isn't available in MV3 service workers, so we parse with regexes.
+// The Forex Factory feed is small (~25 KB, ~120 events), well-formed, and
+// includes CDATA-wrapped date/time/impact/forecast/previous fields.
+
 function parseFeed(xml) {
   const events = [];
-  const eventRe = /<event>([\s\S]*?)<\/event>/g;
-  const fieldRe = /<(\w+)>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/\1>/g;
+  EVENT_RE.lastIndex = 0;
   let em;
-  while ((em = eventRe.exec(xml)) !== null) {
+  while ((em = EVENT_RE.exec(xml)) !== null) {
     const body = em[1];
     const obj = {};
-    fieldRe.lastIndex = 0;
+    FIELD_RE.lastIndex = 0;
     let fm;
-    while ((fm = fieldRe.exec(body)) !== null) obj[fm[1]] = (fm[2] || "").trim();
+    while ((fm = FIELD_RE.exec(body)) !== null) obj[fm[1]] = (fm[2] || "").trim();
     events.push({
       title: obj.title || "",
       country: obj.country || "",
@@ -125,13 +139,13 @@ function parseFeed(xml) {
   return events;
 }
 
-// Forex Factory XML is published in US Eastern Time (with DST).
-// We convert to a UTC epoch so the content script can render in the user's locale.
+// Forex Factory XML times are US Eastern (with DST). Convert to a UTC epoch
+// so the content script can render in the user's local timezone.
 function parseEventDateTime(dateStr, timeStr) {
   if (!dateStr || !timeStr) return null;
-  const dm = dateStr.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  const dm = dateStr.match(DATE_RE);
   if (!dm) return null;
-  const tm = timeStr.match(/^(\d{1,2}):(\d{2})(am|pm)$/i);
+  const tm = timeStr.match(TIME_RE);
   if (!tm) return null; // "All Day" / "Tentative"
   const month = +dm[1], day = +dm[2], year = +dm[3];
   let h = +tm[1];
