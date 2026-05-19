@@ -398,18 +398,38 @@
   function renderGroups(filtered) {
     const groups = new Map();
     for (const ev of filtered) {
-      const key = ev.ts
-        ? new Date(ev.ts).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" })
-        : ev.date || "—";
+      const key = ev.ts ? dayKey(ev.ts) : (ev.date || "—");
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(ev);
     }
-    return [...groups.entries()].map(([day, evs]) => `
-      <li class="newsanchor-day">
-        <div class="day-label">${escapeHtml(day)}</div>
-        <ul class="day-events">${evs.map(renderEvent).join("")}</ul>
-      </li>
-    `).join("");
+    const today = dayKey(Date.now());
+    const tomorrow = dayKey(Date.now() + 86400_000);
+    return [...groups.entries()].map(([key, evs]) => {
+      const sample = evs[0]?.ts;
+      let label, cls = "";
+      if (key === today) { label = "aujourd'hui"; cls = "is-today"; }
+      else if (key === tomorrow) { label = "demain"; cls = "is-tomorrow"; }
+      else if (sample) {
+        label = new Date(sample).toLocaleDateString(undefined, {
+          weekday: "short", day: "numeric", month: "short",
+        });
+      } else {
+        label = evs[0]?.date || "—";
+      }
+      return `
+        <li class="newsanchor-day ${cls}">
+          <div class="day-label">${escapeHtml(label)}</div>
+          <ul class="day-events">${evs.map(renderEvent).join("")}</ul>
+        </li>
+      `;
+    }).join("");
+  }
+
+  function dayKey(ts) {
+    const d = new Date(ts);
+    return d.getFullYear() + "-" +
+      String(d.getMonth() + 1).padStart(2, "0") + "-" +
+      String(d.getDate()).padStart(2, "0");
   }
 
   function renderEvent(ev) {

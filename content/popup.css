@@ -167,7 +167,33 @@
   top: 0;
   background: #131722;
   z-index: 1;
+  display: flex;
+  align-items: center;
 }
+
+#newsanchor-root .newsanchor-day.is-today .day-label {
+  color: #e8ebf0;
+  font-size: 11px;
+  font-weight: 700;
+  padding-top: 10px;
+}
+#newsanchor-root .newsanchor-day.is-today .day-label::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 11px;
+  background: #2962ff;
+  border-radius: 1.5px;
+  margin-right: 7px;
+}
+
+#newsanchor-root .newsanchor-day.is-tomorrow .day-label {
+  color: #9aa0aa;
+}
+
+/* Today's events read at full contrast; future days fade slightly. */
+#newsanchor-root .newsanchor-day:not(.is-today) .ev-title { color: #d1d4dc; }
+#newsanchor-root .newsanchor-day:not(.is-today):not(.is-tomorrow) .ev-time { color: #b3b8c2; }
 
 /* ---------- Event row ---------- */
 
