@@ -2,6 +2,7 @@
 
 #newsanchor-root.newsanchor-root {
   all: initial;
+  --na-alpha: 1;
   position: fixed;
   z-index: 2147483646;
   top: 84px;
@@ -12,7 +13,7 @@
   min-height: 160px;
   display: flex;
   flex-direction: column;
-  background: #131722;
+  background: rgba(19, 23, 34, var(--na-alpha));
   color: #d1d4dc;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 8px;
@@ -27,6 +28,12 @@
   contain: layout style;
 }
 
+/* Typography scaling (S / M / L). All children use em, so the whole popup
+   scales from a single root font-size. */
+#newsanchor-root.is-typo-s { font-size: 11px; }
+#newsanchor-root.is-typo-m { font-size: 12px; }
+#newsanchor-root.is-typo-l { font-size: 14px; }
+
 #newsanchor-root *,
 #newsanchor-root *::before,
 #newsanchor-root *::after { box-sizing: border-box; }
@@ -37,39 +44,47 @@
 #newsanchor-root.is-dragging { user-select: none; }
 #newsanchor-root.is-minimized { height: 22px !important; min-height: 22px !important; }
 #newsanchor-root.is-minimized .newsanchor-body,
-#newsanchor-root.is-minimized .newsanchor-filters,
+#newsanchor-root.is-minimized .newsanchor-settings,
 #newsanchor-root.is-minimized .newsanchor-resize { display: none !important; }
-#newsanchor-root.is-minimized .newsanchor-actions { opacity: 1; }
+#newsanchor-root.is-minimized .newsanchor-actions { opacity: 1; pointer-events: auto; }
 
-/* ---------- Drag strip (no visible header) ---------- */
+/* ---------- Drag strip (absolute, no layout space) ---------- */
 
 #newsanchor-root .newsanchor-drag {
-  flex-shrink: 0;
-  height: 22px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 18px;
   cursor: grab;
   user-select: none;
+  z-index: 2;
 }
 #newsanchor-root.is-dragging .newsanchor-drag { cursor: grabbing; }
 
-/* ---------- Floating actions (hover-revealed) ---------- */
+/* ---------- Floating actions (hover-revealed, overlay text) ---------- */
 
 #newsanchor-root .newsanchor-actions {
   position: absolute;
-  top: 4px;
-  right: 6px;
+  top: 3px;
+  right: 4px;
   display: flex;
   gap: 0;
-  z-index: 3;
+  z-index: 4;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s;
+  background: rgba(19, 23, 34, 0.88);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border-radius: 5px;
+  padding: 1px;
 }
 #newsanchor-root:hover .newsanchor-actions,
 #newsanchor-root:focus-within .newsanchor-actions {
   opacity: 1;
   pointer-events: auto;
 }
-#newsanchor-root.is-minimized .newsanchor-actions { pointer-events: auto; }
 
 #newsanchor-root .newsanchor-btn {
   appearance: none;
@@ -84,7 +99,7 @@
   font-family: inherit;
   transition: background 0.12s, color 0.12s;
 }
-#newsanchor-root .newsanchor-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+#newsanchor-root .newsanchor-btn:hover { background: rgba(255, 255, 255, 0.10); color: #fff; }
 #newsanchor-root .newsanchor-btn:focus-visible { outline: 1px solid rgba(41, 98, 255, 0.6); outline-offset: 1px; }
 
 @keyframes newsanchor-spin { to { transform: rotate(360deg); } }
@@ -93,30 +108,117 @@
   color: #2962ff;
 }
 
-/* ---------- Filter pills (dot-only) ---------- */
+/* ---------- Settings panel ---------- */
 
-#newsanchor-root .newsanchor-filters {
+#newsanchor-root .newsanchor-settings {
   display: flex;
-  gap: 2px;
-  padding: 0 9px 6px;
+  flex-direction: column;
+  gap: 10px;
+  /* top: just enough that the absolute drag/actions don't overlap the labels */
+  padding: 20px 10px 10px;
   flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
+#newsanchor-root .settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+#newsanchor-root .settings-label {
+  font-size: 0.75em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #6f7585;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+#newsanchor-root .settings-value {
+  color: #b3b8c2;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0;
+}
+#newsanchor-root .settings-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
 #newsanchor-root .newsanchor-pill {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.04);
+  border: 0;
+  color: #b3b8c2;
+  cursor: pointer;
+  padding: 4px 9px 4px 7px;
+  font-size: 0.83em;
+  font-weight: 500;
+  font-family: inherit;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  letter-spacing: 0.01em;
+  transition: background 0.12s, color 0.12s;
+}
+#newsanchor-root .newsanchor-pill:hover { background: rgba(255, 255, 255, 0.07); }
+#newsanchor-root .newsanchor-pill.is-active { background: rgba(255, 255, 255, 0.12); color: #fff; }
+#newsanchor-root .newsanchor-pill .dot { opacity: 0.4; transition: opacity 0.12s; }
+#newsanchor-root .newsanchor-pill.is-active .dot { opacity: 1; }
+
+#newsanchor-root .settings-segmented {
+  display: inline-flex;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 5px;
+  padding: 2px;
+  align-self: flex-start;
+}
+#newsanchor-root .seg-btn {
   appearance: none;
   background: transparent;
   border: 0;
-  cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 3px;
+  color: #6f7585;
+  padding: 3px 11px;
+  font-size: 0.83em;
+  font-weight: 600;
   font-family: inherit;
-  display: inline-flex;
-  align-items: center;
-  transition: background 0.12s;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.12s, color 0.12s;
 }
-#newsanchor-root .newsanchor-pill:hover { background: rgba(255, 255, 255, 0.05); }
-#newsanchor-root .newsanchor-pill.is-active { background: rgba(255, 255, 255, 0.08); }
-#newsanchor-root .newsanchor-pill .dot { opacity: 0.3; transition: opacity 0.12s; }
-#newsanchor-root .newsanchor-pill.is-active .dot { opacity: 1; }
+#newsanchor-root .seg-btn:hover { color: #b3b8c2; }
+#newsanchor-root .seg-btn.is-active { background: rgba(255, 255, 255, 0.12); color: #fff; }
+
+#newsanchor-root .settings-range {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  outline: none;
+  margin: 4px 0 0;
+}
+#newsanchor-root .settings-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 0;
+}
+#newsanchor-root .settings-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  border: 0;
+  cursor: pointer;
+}
 
 /* ---------- Body ---------- */
 
@@ -137,7 +239,7 @@
 #newsanchor-root .day-events { list-style: none; margin: 0; padding: 0; }
 
 #newsanchor-root .day-label {
-  font-size: 9px;
+  font-size: 0.75em;
   font-weight: 600;
   color: #5a6070;
   text-transform: lowercase;
@@ -145,15 +247,23 @@
   padding: 4px 0 3px;
   position: sticky;
   top: 0;
-  background: #131722;
+  background: rgba(19, 23, 34, var(--na-alpha));
   z-index: 1;
   display: flex;
   align-items: center;
 }
 
+/* Today: distinct background tint over the whole day group + brighter label
+   with a TradingView-blue accent bar */
+#newsanchor-root .newsanchor-day.is-today {
+  background: rgba(41, 98, 255, 0.06);
+  margin: 0 -9px;
+  padding: 0 9px 2px;
+}
 #newsanchor-root .newsanchor-day.is-today .day-label {
+  background: rgba(19, 23, 34, var(--na-alpha));
   color: #e8ebf0;
-  font-size: 10px;
+  font-size: 0.83em;
   font-weight: 700;
   padding-top: 5px;
 }
@@ -161,7 +271,7 @@
   content: "";
   display: inline-block;
   width: 2px;
-  height: 9px;
+  height: 0.75em;
   background: #2962ff;
   border-radius: 1px;
   margin-right: 6px;
@@ -172,12 +282,12 @@
 
 #newsanchor-root .newsanchor-event {
   display: grid;
-  grid-template-columns: 34px 1fr;
+  grid-template-columns: 2.8em 1fr;
   column-gap: 8px;
   padding: 4px 0;
 }
 #newsanchor-root .ev-time {
-  font-size: 11px;
+  font-size: 0.92em;
   font-weight: 500;
   color: #d1d4dc;
   font-variant-numeric: tabular-nums;
@@ -191,14 +301,14 @@
   min-width: 0;
 }
 #newsanchor-root .ev-country {
-  font-size: 9px;
+  font-size: 0.75em;
   font-weight: 600;
   color: #8a90a0;
   letter-spacing: 0.04em;
   flex-shrink: 0;
 }
 #newsanchor-root .ev-title {
-  font-size: 11.5px;
+  font-size: 0.96em;
   color: #e8ebf0;
   flex: 1;
   min-width: 0;
@@ -207,8 +317,8 @@
 }
 #newsanchor-root .ev-values {
   margin-top: 1px;
-  padding-left: 19px;
-  font-size: 10px;
+  padding-left: 1.6em;
+  font-size: 0.83em;
   color: #8a90a0;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -225,8 +335,10 @@
 /* Impact dots */
 #newsanchor-root .dot {
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 0.55em;
+  height: 0.55em;
+  min-width: 6px;
+  min-height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
   background: #6f7585;
@@ -240,7 +352,7 @@
   padding: 32px 12px;
   text-align: center;
   color: #5a6070;
-  font-size: 11px;
+  font-size: 0.92em;
 }
 
 /* ---------- Transient toast (refresh feedback) ---------- */
@@ -255,13 +367,13 @@
   color: #d1d4dc;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
-  font-size: 10px;
+  font-size: 0.83em;
   letter-spacing: 0.02em;
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s, transform 0.2s;
-  z-index: 2;
+  z-index: 3;
 }
 #newsanchor-root .newsanchor-toast.is-visible {
   opacity: 1;
@@ -280,6 +392,7 @@
   cursor: se-resize;
   opacity: 0;
   transition: opacity 0.15s;
+  z-index: 3;
 }
 #newsanchor-root:hover .newsanchor-resize { opacity: 0.55; }
 #newsanchor-root .newsanchor-resize:hover { opacity: 1; }

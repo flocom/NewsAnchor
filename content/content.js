@@ -12,8 +12,13 @@
   const FILTER_KEY = "impact_filter";
   const EVENTS_KEY = "ff_events";
   const META_KEY = "ff_meta";
-  const DEFAULT_STATE = { x: null, y: null, w: 280, h: 360, minimized: false, hidden: false };
+  const DEFAULT_STATE = {
+    x: null, y: null, w: 280, h: 360,
+    minimized: false, hidden: false,
+    opacity: 100, typoSize: "m",
+  };
   const DEFAULT_FILTER = { high: true, medium: true, low: false, holiday: false };
+  const TYPO_SIZES = ["s", "m", "l"];
 
   let state = { ...DEFAULT_STATE };
   let filter = { ...DEFAULT_FILTER };
@@ -88,12 +93,13 @@
     if (area !== "local") return;
     if (changes[FILTER_KEY]) {
       filter = { ...DEFAULT_FILTER, ...changes[FILTER_KEY].newValue };
-      syncFilterPills();
+      syncSettings();
       renderEvents();
     }
     if (changes[STATE_KEY]) {
       state = { ...DEFAULT_STATE, ...changes[STATE_KEY].newValue };
       applyState();
+      syncSettings();
     }
     if (changes[EVENTS_KEY]) {
       events = changes[EVENTS_KEY].newValue || [];
@@ -278,15 +284,32 @@
     root.innerHTML = `
       <div class="newsanchor-drag" data-drag-handle></div>
       <div class="newsanchor-actions">
-        <button type="button" class="newsanchor-btn" data-action="filter" title="Filtres" aria-label="Filtres">⚙</button>
+        <button type="button" class="newsanchor-btn" data-action="settings" title="Réglages" aria-label="Réglages">⚙</button>
         <button type="button" class="newsanchor-btn" data-action="refresh" title="Rafraîchir" aria-label="Rafraîchir">↻</button>
         <button type="button" class="newsanchor-btn" data-action="close" title="Fermer" aria-label="Fermer">×</button>
       </div>
-      <div class="newsanchor-filters is-collapsed">
-        <button type="button" class="newsanchor-pill" data-impact="high" title="Impact élevé" aria-label="Impact élevé"><span class="dot dot-high"></span></button>
-        <button type="button" class="newsanchor-pill" data-impact="medium" title="Impact moyen" aria-label="Impact moyen"><span class="dot dot-medium"></span></button>
-        <button type="button" class="newsanchor-pill" data-impact="low" title="Impact bas" aria-label="Impact bas"><span class="dot dot-low"></span></button>
-        <button type="button" class="newsanchor-pill" data-impact="holiday" title="Jours fériés" aria-label="Jours fériés"><span class="dot dot-holiday"></span></button>
+      <div class="newsanchor-settings is-collapsed">
+        <div class="settings-section">
+          <div class="settings-label">Impact</div>
+          <div class="settings-row">
+            <button type="button" class="newsanchor-pill" data-impact="high"><span class="dot dot-high"></span>Élevé</button>
+            <button type="button" class="newsanchor-pill" data-impact="medium"><span class="dot dot-medium"></span>Moyen</button>
+            <button type="button" class="newsanchor-pill" data-impact="low"><span class="dot dot-low"></span>Bas</button>
+            <button type="button" class="newsanchor-pill" data-impact="holiday"><span class="dot dot-holiday"></span>Férié</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-label">Taille du texte</div>
+          <div class="settings-segmented">
+            <button type="button" class="seg-btn" data-typo="s">S</button>
+            <button type="button" class="seg-btn" data-typo="m">M</button>
+            <button type="button" class="seg-btn" data-typo="l">L</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-label">Opacité <span class="settings-value" data-opacity-value>100%</span></div>
+          <input type="range" class="settings-range" min="40" max="100" step="5" data-opacity-slider />
+        </div>
       </div>
       <div class="newsanchor-body">
         <ul class="newsanchor-events"></ul>
@@ -301,9 +324,9 @@
       if (!btn) return;
       e.stopPropagation();
       switch (btn.getAttribute("data-action")) {
-        case "close":   saveState({ hidden: true }); break;
-        case "refresh": refresh(); break;
-        case "filter":  toggleFilters(); break;
+        case "close":    saveState({ hidden: true }); break;
+        case "refresh":  refresh(); break;
+        case "settings": toggleSettings(); break;
       }
     });
     // Double-click the top drag strip to collapse to a minimal handle.
@@ -311,27 +334,47 @@
       saveState({ minimized: !state.minimized });
     });
 
-    syncFilterPills();
-    root.querySelector(".newsanchor-filters").addEventListener("click", (e) => {
+    syncSettings();
+    root.querySelector(".newsanchor-settings").addEventListener("click", (e) => {
       const pill = e.target.closest(".newsanchor-pill[data-impact]");
-      if (!pill) return;
-      e.stopPropagation();
-      const key = pill.getAttribute("data-impact");
-      filter = { ...filter, [key]: !filter[key] };
-      chrome.storage.local.set({ [FILTER_KEY]: filter });
-      syncFilterPills();
-      renderEvents();
+      if (pill) {
+        e.stopPropagation();
+        const key = pill.getAttribute("data-impact");
+        filter = { ...filter, [key]: !filter[key] };
+        chrome.storage.local.set({ [FILTER_KEY]: filter });
+        syncSettings();
+        renderEvents();
+        return;
+      }
+      const seg = e.target.closest(".seg-btn[data-typo]");
+      if (seg) {
+        e.stopPropagation();
+        saveState({ typoSize: seg.getAttribute("data-typo") });
+        return;
+      }
+    });
+    root.querySelector("[data-opacity-slider]").addEventListener("input", (e) => {
+      const v = parseInt(e.target.value, 10);
+      saveState({ opacity: clamp(v, 40, 100) });
     });
 
     enableDrag(root, root.querySelector("[data-drag-handle]"));
     enableResize(root, root.querySelector("[data-resize-handle]"));
   }
 
-  function syncFilterPills() {
+  function syncSettings() {
     if (!root) return;
     root.querySelectorAll(".newsanchor-pill[data-impact]").forEach((pill) => {
       pill.classList.toggle("is-active", !!filter[pill.getAttribute("data-impact")]);
     });
+    const typo = TYPO_SIZES.includes(state.typoSize) ? state.typoSize : "m";
+    root.querySelectorAll(".seg-btn[data-typo]").forEach((b) => {
+      b.classList.toggle("is-active", b.getAttribute("data-typo") === typo);
+    });
+    const slider = root.querySelector("[data-opacity-slider]");
+    if (slider) slider.value = String(state.opacity ?? 100);
+    const valEl = root.querySelector("[data-opacity-value]");
+    if (valEl) valEl.textContent = `${state.opacity ?? 100}%`;
   }
 
   function applyState() {
@@ -352,7 +395,14 @@
     root.style.width = (state.w || DEFAULT_STATE.w) + "px";
     root.style.height = state.minimized ? "auto" : (state.h || DEFAULT_STATE.h) + "px";
     root.classList.toggle("is-minimized", !!state.minimized);
+
+    root.style.setProperty("--na-alpha", ((state.opacity ?? 100) / 100).toString());
+    TYPO_SIZES.forEach((s) => root.classList.remove(`is-typo-${s}`));
+    const typo = TYPO_SIZES.includes(state.typoSize) ? state.typoSize : "m";
+    root.classList.add(`is-typo-${typo}`);
   }
+
+  function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
 
   function onWindowResize() {
     if (!root || state.x == null || state.y == null) return;
@@ -476,9 +526,8 @@
 
   // ---- Actions ---------------------------------------------------------------
 
-  function toggleFilters() {
-    const f = root.querySelector(".newsanchor-filters");
-    f.classList.toggle("is-collapsed");
+  function toggleSettings() {
+    root.querySelector(".newsanchor-settings").classList.toggle("is-collapsed");
   }
 
   function saveState(patch) {
