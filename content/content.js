@@ -487,19 +487,22 @@
       : (ev.time || "—");
     const impact = ev.impact || "low";
     const values = formatValues(ev.previous, ev.forecast);
-    return `
-      <li class="newsanchor-event" data-impact="${escapeHtml(impact)}">
-        <div class="ev-time">${escapeHtml(when)}</div>
-        <div class="ev-content">
-          <div class="ev-row">
-            <span class="dot dot-${escapeHtml(impact)}"></span>
-            <span class="ev-country">${escapeHtml(ev.country)}</span>
-            <span class="ev-title">${escapeHtml(ev.title)}</span>
-          </div>
-          ${values ? `<div class="ev-values">${values}</div>` : ""}
+    const body = `
+      <div class="ev-time">${escapeHtml(when)}</div>
+      <div class="ev-content">
+        <div class="ev-row">
+          <span class="dot dot-${escapeHtml(impact)}"></span>
+          <span class="ev-country">${escapeHtml(ev.country)}</span>
+          <span class="ev-title">${escapeHtml(ev.title)}</span>
+          <span class="ev-ext" aria-hidden="true">↗</span>
         </div>
-      </li>
+        ${values ? `<div class="ev-values">${values}</div>` : ""}
+      </div>
     `;
+    const inner = ev.url
+      ? `<a class="ev-link" href="${escapeHtml(ev.url)}" target="_blank" rel="noopener" title="Voir sur Forex Factory">${body}</a>`
+      : `<div class="ev-link is-static">${body}</div>`;
+    return `<li class="newsanchor-event" data-impact="${escapeHtml(impact)}">${inner}</li>`;
   }
 
   function formatValues(prev, fcst) {
