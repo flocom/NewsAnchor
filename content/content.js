@@ -1,5 +1,5 @@
 // NewsAnchor content script (TradingView).
-// Detects the current ticker, fetches events from the service worker,
+// Detects the current ticker, reads cached events from chrome.storage.local,
 // and renders a draggable popup with the relevant economic announcements.
 
 (function () {
@@ -10,9 +10,10 @@
 
   const STATE_KEY = "ui_state";
   const FILTER_KEY = "impact_filter";
+  const EVENTS_KEY = "ff_events";
+  const META_KEY = "ff_meta";
   const DEFAULT_STATE = { x: null, y: null, w: 340, h: 420, minimized: false, hidden: false };
   const DEFAULT_FILTER = { high: true, medium: true, low: false, holiday: false };
-  const IMPACT_RANK = { high: 3, medium: 2, low: 1, holiday: 0 };
 
   let state = { ...DEFAULT_STATE };
   let filter = { ...DEFAULT_FILTER };
@@ -20,71 +21,83 @@
   let meta = null;
   let currentSymbol = null;
   let resolved = null;
+  let currencies = new Set();
   let root = null;
 
   init();
 
   async function init() {
-    const stored = await chromeGet([STATE_KEY, FILTER_KEY]);
+    const stored = await chromeGet([STATE_KEY, FILTER_KEY, EVENTS_KEY, META_KEY]);
     if (stored[STATE_KEY]) state = { ...DEFAULT_STATE, ...stored[STATE_KEY] };
     if (stored[FILTER_KEY]) filter = { ...DEFAULT_FILTER, ...stored[FILTER_KEY] };
+    events = stored[EVENTS_KEY] || [];
+    meta = stored[META_KEY] || null;
 
     buildPopup();
     applyState();
+    renderFooter();
 
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local") return;
-      if (changes[FILTER_KEY]) {
-        filter = { ...DEFAULT_FILTER, ...changes[FILTER_KEY].newValue };
-        renderEvents();
-      }
-      if (changes[STATE_KEY]) {
-        const next = { ...DEFAULT_STATE, ...changes[STATE_KEY].newValue };
-        const wasHidden = state.hidden;
-        state = next;
-        applyState();
-        if (wasHidden && !state.hidden) loadEvents();
-      }
-      if (changes.ff_events) {
-        events = changes.ff_events.newValue || [];
-        renderEvents();
-      }
-      if (changes.ff_meta) {
-        meta = changes.ff_meta.newValue || null;
-        renderFooter();
-      }
+    chrome.storage.onChanged.addListener(onStorageChanged);
+    window.addEventListener("resize", onWindowResize, { passive: true });
+    window.addEventListener("beforeunload", () => {
+      chrome.storage.onChanged.removeListener(onStorageChanged);
     });
 
     watchSymbol();
-    await loadEvents();
+
+    if (!events.length || !meta || Date.now() - meta.fetchedAt > 4 * 3600 * 1000) {
+      refresh();
+    }
+  }
+
+  function onStorageChanged(changes, area) {
+    if (area !== "local") return;
+    if (changes[FILTER_KEY]) {
+      filter = { ...DEFAULT_FILTER, ...changes[FILTER_KEY].newValue };
+      syncFilterCheckboxes();
+      renderEvents();
+    }
+    if (changes[STATE_KEY]) {
+      state = { ...DEFAULT_STATE, ...changes[STATE_KEY].newValue };
+      applyState();
+    }
+    if (changes[EVENTS_KEY]) {
+      events = changes[EVENTS_KEY].newValue || [];
+      renderEvents();
+    }
+    if (changes[META_KEY]) {
+      meta = changes[META_KEY].newValue || null;
+      renderFooter();
+    }
   }
 
   // ---- Symbol detection ------------------------------------------------------
 
   function watchSymbol() {
-    const checkAndUpdate = () => {
+    const tick = () => {
+      if (document.hidden) return;
       const sym = detectSymbol();
-      if (sym && sym !== currentSymbol) {
-        currentSymbol = sym;
-        resolved = window.NewsAnchorSymbol.resolve(sym);
-        renderHeader();
-        renderEvents();
-      }
+      if (sym === currentSymbol) return;
+      currentSymbol = sym;
+      resolved = sym ? window.NewsAnchorSymbol.resolve(sym) : null;
+      currencies = new Set(resolved?.currencies || []);
+      renderHeader();
+      renderEvents();
+      applyState(); // visibility depends on currentSymbol
     };
 
-    checkAndUpdate();
+    tick();
 
     const origPush = history.pushState;
     const origReplace = history.replaceState;
-    history.pushState = function () { origPush.apply(this, arguments); setTimeout(checkAndUpdate, 50); };
-    history.replaceState = function () { origReplace.apply(this, arguments); setTimeout(checkAndUpdate, 50); };
-    window.addEventListener("popstate", checkAndUpdate);
+    history.pushState = function () { origPush.apply(this, arguments); queueMicrotask(tick); };
+    history.replaceState = function () { origReplace.apply(this, arguments); queueMicrotask(tick); };
+    window.addEventListener("popstate", tick);
 
-    const titleObserver = new MutationObserver(checkAndUpdate);
     const titleEl = document.querySelector("title");
-    if (titleEl) titleObserver.observe(titleEl, { childList: true });
+    if (titleEl) new MutationObserver(tick).observe(titleEl, { childList: true });
 
-    setInterval(checkAndUpdate, 1500);
+    setInterval(tick, 2000);
   }
 
   function detectSymbol() {
@@ -92,51 +105,27 @@
       const u = new URL(location.href);
       const fromQuery = u.searchParams.get("symbol");
       if (fromQuery) return decodeURIComponent(fromQuery);
-
       const symMatch = u.pathname.match(/\/symbols\/([^/]+)\/?/i);
       if (symMatch) return decodeURIComponent(symMatch[1]).replace(/-/g, ":");
     } catch {}
 
     const legend = document.querySelector('[data-name="legend-source-title"]');
-    if (legend && legend.textContent) return legend.textContent.trim();
+    if (legend?.textContent) return legend.textContent.trim();
 
     const dataSym = document.querySelector("[data-symbol]");
     if (dataSym) return dataSym.getAttribute("data-symbol");
 
     const titleMatch = document.title.match(/^([A-Z0-9.:_/-]+)/);
-    if (titleMatch) return titleMatch[1];
-
-    return null;
+    return titleMatch ? titleMatch[1] : null;
   }
 
-  // ---- Data ------------------------------------------------------------------
-
-  async function loadEvents() {
-    const resp = await sendMessage({ type: "newsanchor:getEvents" });
-    if (resp) {
-      events = resp.events || [];
-      meta = resp.meta || null;
-    }
-    renderEvents();
-    renderFooter();
-
-    if (!events.length || !meta || Date.now() - meta.fetchedAt > 4 * 3600 * 1000) {
-      refresh();
-    }
-  }
+  // ---- Data refresh ----------------------------------------------------------
 
   async function refresh() {
     setStatus("Mise à jour…");
     const resp = await sendMessage({ type: "newsanchor:refresh" });
-    if (resp && resp.ok) {
-      const data = await chromeGet(["ff_events", "ff_meta"]);
-      events = data.ff_events || [];
-      meta = data.ff_meta || null;
-      renderEvents();
-      renderFooter();
-    } else {
-      setStatus("Erreur de mise à jour");
-    }
+    if (!resp?.ok) setStatus("Erreur de mise à jour");
+    // Successful refresh fires storage.onChanged → renderEvents/renderFooter run.
   }
 
   // ---- DOM construction ------------------------------------------------------
@@ -168,7 +157,7 @@
       <div class="newsanchor-body">
         <div class="newsanchor-currencies"></div>
         <ul class="newsanchor-events"></ul>
-        <div class="newsanchor-empty" hidden>Aucun événement à venir pour cet actif.</div>
+        <div class="newsanchor-empty" hidden></div>
       </div>
       <div class="newsanchor-footer">
         <span class="newsanchor-status"></span>
@@ -176,35 +165,46 @@
       </div>
       <div class="newsanchor-resize" data-resize-handle></div>
     `;
-    document.documentElement.appendChild(root);
+    (document.body || document.documentElement).appendChild(root);
 
-    root.querySelectorAll(".newsanchor-actions .newsanchor-btn").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const action = btn.getAttribute("data-action");
-        if (action === "close") setHidden(true);
-        else if (action === "minimize") toggleMinimized();
-        else if (action === "refresh") refresh();
-        else if (action === "filter") toggleFilters();
-      });
+    root.querySelector(".newsanchor-actions").addEventListener("click", (e) => {
+      const btn = e.target.closest(".newsanchor-btn");
+      if (!btn) return;
+      e.stopPropagation();
+      switch (btn.getAttribute("data-action")) {
+        case "close":     saveState({ hidden: true }); break;
+        case "minimize":  saveState({ minimized: !state.minimized }); break;
+        case "refresh":   refresh(); break;
+        case "filter":    toggleFilters(); break;
+      }
     });
 
-    root.querySelectorAll(".newsanchor-filters input[type=checkbox]").forEach((cb) => {
-      const key = cb.getAttribute("data-impact");
-      cb.checked = !!filter[key];
-      cb.addEventListener("change", () => {
-        filter = { ...filter, [key]: cb.checked };
-        chrome.storage.local.set({ [FILTER_KEY]: filter });
-        renderEvents();
-      });
+    syncFilterCheckboxes();
+    root.querySelector(".newsanchor-filters").addEventListener("change", (e) => {
+      const cb = e.target.closest('input[type="checkbox"][data-impact]');
+      if (!cb) return;
+      filter = { ...filter, [cb.getAttribute("data-impact")]: cb.checked };
+      chrome.storage.local.set({ [FILTER_KEY]: filter });
+      renderEvents();
     });
 
     enableDrag(root, root.querySelector("[data-drag-handle]"));
     enableResize(root, root.querySelector("[data-resize-handle]"));
   }
 
+  function syncFilterCheckboxes() {
+    if (!root) return;
+    root.querySelectorAll('.newsanchor-filters input[data-impact]').forEach((cb) => {
+      cb.checked = !!filter[cb.getAttribute("data-impact")];
+    });
+  }
+
   function applyState() {
     if (!root) return;
+    const visible = !state.hidden && !!currentSymbol;
+    root.style.display = visible ? "flex" : "none";
+    if (!visible) return;
+
     if (state.x == null || state.y == null) {
       root.style.right = "16px";
       root.style.top = "84px";
@@ -217,16 +217,20 @@
     root.style.width = (state.w || DEFAULT_STATE.w) + "px";
     root.style.height = state.minimized ? "auto" : (state.h || DEFAULT_STATE.h) + "px";
     root.classList.toggle("is-minimized", !!state.minimized);
-    root.style.display = state.hidden ? "none" : "flex";
+  }
+
+  function onWindowResize() {
+    if (!root || state.x == null || state.y == null) return;
+    root.style.left = clampX(state.x) + "px";
+    root.style.top = clampY(state.y) + "px";
   }
 
   // ---- Rendering -------------------------------------------------------------
 
   function renderHeader() {
     if (!root) return;
-    const tickerEl = root.querySelector(".newsanchor-ticker");
+    root.querySelector(".newsanchor-ticker").textContent = resolved?.ticker || currentSymbol || "—";
     const badgeEl = root.querySelector(".newsanchor-badge");
-    tickerEl.textContent = resolved?.ticker || currentSymbol || "—";
     badgeEl.textContent = resolved ? resolved.type.toUpperCase() : "";
     badgeEl.setAttribute("data-type", resolved?.type || "");
   }
@@ -238,28 +242,25 @@
     const ccyEl = root.querySelector(".newsanchor-currencies");
 
     if (!resolved) {
-      list.innerHTML = "";
+      list.textContent = "";
+      ccyEl.textContent = "";
       empty.hidden = false;
       empty.textContent = "Ticker non détecté.";
-      ccyEl.textContent = "";
       return;
     }
 
     ccyEl.innerHTML = resolved.currencies
-      .map((c) => `<span class="cc">${escapeHtml(c)}</span>`)
-      .join("");
+      .map((c) => `<span class="cc">${escapeHtml(c)}</span>`).join("");
 
-    const now = Date.now();
-    const filtered = events.filter((e) => {
-      const matchCountry = e.country === "All" || resolved.currencies.includes(e.country);
-      if (!matchCountry) return false;
-      if (!filter[e.impact]) return false;
-      if (e.ts && e.ts < now - 60 * 60 * 1000) return false;
-      return true;
-    });
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    const filtered = events.filter((e) =>
+      (e.country === "All" || currencies.has(e.country)) &&
+      filter[e.impact] &&
+      (!e.ts || e.ts >= cutoff)
+    );
 
-    if (filtered.length === 0) {
-      list.innerHTML = "";
+    if (!filtered.length) {
+      list.textContent = "";
       empty.hidden = false;
       empty.textContent = events.length
         ? "Aucun événement à venir pour cet actif cette semaine."
@@ -273,21 +274,19 @@
   function renderEvent(ev) {
     const when = ev.ts
       ? new Date(ev.ts).toLocaleString(undefined, {
-          weekday: "short",
-          hour: "2-digit",
-          minute: "2-digit",
+          weekday: "short", hour: "2-digit", minute: "2-digit",
         })
       : `${ev.date} ${ev.time || ""}`.trim();
-    const impactClass = `dot-${ev.impact || "low"}`;
     const values = [];
     if (ev.previous) values.push(`<span class="prev">Préc <b>${escapeHtml(ev.previous)}</b></span>`);
     if (ev.forecast) values.push(`<span class="fcst">Prév <b>${escapeHtml(ev.forecast)}</b></span>`);
-    const url = ev.url ? `<a class="ext" href="${escapeAttr(ev.url)}" target="_blank" rel="noopener">↗</a>` : "";
+    const url = ev.url
+      ? `<a class="ext" href="${escapeHtml(ev.url)}" target="_blank" rel="noopener">↗</a>` : "";
     return `
-      <li class="newsanchor-event" data-impact="${escapeAttr(ev.impact)}">
+      <li class="newsanchor-event" data-impact="${escapeHtml(ev.impact)}">
         <div class="ev-time">${escapeHtml(when)}</div>
         <div class="ev-row">
-          <span class="dot ${impactClass}" title="${escapeAttr(ev.impact || "")}"></span>
+          <span class="dot dot-${escapeHtml(ev.impact || "low")}" title="${escapeHtml(ev.impact || "")}"></span>
           <span class="ev-country">${escapeHtml(ev.country)}</span>
           <span class="ev-title">${escapeHtml(ev.title)}</span>
           ${url}
@@ -299,7 +298,7 @@
 
   function renderFooter() {
     if (!root) return;
-    if (!meta) { setStatus(""); return; }
+    if (!meta) return setStatus("");
     const d = new Date(meta.fetchedAt);
     setStatus(`MAJ ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} · ${meta.count} events`);
   }
@@ -316,14 +315,8 @@
     f.hidden = !f.hidden;
   }
 
-  function toggleMinimized() {
-    state = { ...state, minimized: !state.minimized };
-    chrome.storage.local.set({ [STATE_KEY]: state });
-    applyState();
-  }
-
-  function setHidden(h) {
-    state = { ...state, hidden: !!h };
+  function saveState(patch) {
+    state = { ...state, ...patch };
     chrome.storage.local.set({ [STATE_KEY]: state });
     applyState();
   }
@@ -331,72 +324,80 @@
   // ---- Drag & resize ---------------------------------------------------------
 
   function enableDrag(el, handle) {
-    let startX, startY, origX, origY, dragging = false;
-    handle.addEventListener("mousedown", (e) => {
-      if (e.target.closest(".newsanchor-actions")) return;
-      dragging = true;
-      const rect = el.getBoundingClientRect();
-      startX = e.clientX;
-      startY = e.clientY;
-      origX = rect.left;
-      origY = rect.top;
-      el.classList.add("is-dragging");
-      e.preventDefault();
-    });
-    window.addEventListener("mousemove", (e) => {
-      if (!dragging) return;
-      const x = origX + (e.clientX - startX);
-      const y = origY + (e.clientY - startY);
-      el.style.left = clampX(x) + "px";
-      el.style.top = clampY(y) + "px";
-      el.style.right = "auto";
-    });
-    window.addEventListener("mouseup", () => {
-      if (!dragging) return;
-      dragging = false;
+    let startX, startY, origX, origY;
+    let raf = 0;
+    let lastEvent = null;
+
+    const onMove = (e) => {
+      lastEvent = e;
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (!lastEvent) return;
+        el.style.left = clampX(origX + (lastEvent.clientX - startX)) + "px";
+        el.style.top = clampY(origY + (lastEvent.clientY - startY)) + "px";
+        el.style.right = "auto";
+        lastEvent = null;
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
       el.classList.remove("is-dragging");
       const rect = el.getBoundingClientRect();
-      state = { ...state, x: rect.left, y: rect.top };
-      chrome.storage.local.set({ [STATE_KEY]: state });
+      saveState({ x: Math.round(rect.left), y: Math.round(rect.top) });
+    };
+    handle.addEventListener("mousedown", (e) => {
+      if (e.target.closest(".newsanchor-actions")) return;
+      const rect = el.getBoundingClientRect();
+      startX = e.clientX; startY = e.clientY;
+      origX = rect.left;  origY = rect.top;
+      el.classList.add("is-dragging");
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      e.preventDefault();
     });
   }
 
   function enableResize(el, handle) {
-    let startX, startY, startW, startH, resizing = false;
-    handle.addEventListener("mousedown", (e) => {
-      resizing = true;
+    let startX, startY, startW, startH;
+    let raf = 0;
+    let lastEvent = null;
+
+    const onMove = (e) => {
+      lastEvent = e;
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (!lastEvent) return;
+        el.style.width = Math.max(260, startW + (lastEvent.clientX - startX)) + "px";
+        el.style.height = Math.max(180, startH + (lastEvent.clientY - startY)) + "px";
+        lastEvent = null;
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
       const rect = el.getBoundingClientRect();
-      startX = e.clientX;
-      startY = e.clientY;
-      startW = rect.width;
-      startH = rect.height;
+      saveState({ w: Math.round(rect.width), h: Math.round(rect.height) });
+    };
+    handle.addEventListener("mousedown", (e) => {
+      const rect = el.getBoundingClientRect();
+      startX = e.clientX; startY = e.clientY;
+      startW = rect.width; startH = rect.height;
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
       e.preventDefault();
       e.stopPropagation();
     });
-    window.addEventListener("mousemove", (e) => {
-      if (!resizing) return;
-      const w = Math.max(260, startW + (e.clientX - startX));
-      const h = Math.max(180, startH + (e.clientY - startY));
-      el.style.width = w + "px";
-      el.style.height = h + "px";
-    });
-    window.addEventListener("mouseup", () => {
-      if (!resizing) return;
-      resizing = false;
-      const rect = el.getBoundingClientRect();
-      state = { ...state, w: Math.round(rect.width), h: Math.round(rect.height) };
-      chrome.storage.local.set({ [STATE_KEY]: state });
-    });
   }
 
-  function clampX(x) {
-    const max = Math.max(0, window.innerWidth - 200);
-    return Math.min(Math.max(0, x), max);
-  }
-  function clampY(y) {
-    const max = Math.max(0, window.innerHeight - 80);
-    return Math.min(Math.max(0, y), max);
-  }
+  function clampX(x) { return Math.min(Math.max(0, x), Math.max(0, window.innerWidth - 200)); }
+  function clampY(y) { return Math.min(Math.max(0, y), Math.max(0, window.innerHeight - 80)); }
 
   // ---- Helpers ---------------------------------------------------------------
 
@@ -406,17 +407,15 @@
   function sendMessage(msg) {
     return new Promise((resolve) => {
       try {
-        chrome.runtime.sendMessage(msg, (resp) => {
+        chrome.runtime.sendMessage(msg, (r) => {
           if (chrome.runtime.lastError) return resolve(null);
-          resolve(resp);
+          resolve(r);
         });
       } catch { resolve(null); }
     });
   }
+  const HTML_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
   function escapeHtml(s) {
-    return String(s ?? "").replace(/[&<>"']/g, (c) => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-    })[c]);
+    return String(s ?? "").replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
   }
-  function escapeAttr(s) { return escapeHtml(s); }
 })();

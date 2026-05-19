@@ -135,9 +135,17 @@
       }
     }
 
-    // 4) Index-like 7+ char with known commodity/index substring (eg "GOLDUSD").
+    // 3b) Forex pair with stable quote (eg EURUSDT, GBPUSDC on Binance).
+    const fxStable = matchForexStable(sym);
+    if (fxStable) {
+      return { type: "forex", currencies: dedupe([fxStable.base, "USD"]), ticker: sym, ...fxStable };
+    }
+
+    // 4) Commodity-prefixed symbol (eg "GOLDUSD", "XAUUSDT").
     for (const [k, v] of Object.entries(COMMODITY_MAP)) {
-      if (sym.startsWith(k) && (sym.length === k.length || FX_CODES.has(sym.slice(k.length)))) {
+      if (!sym.startsWith(k)) continue;
+      const tail = sym.slice(k.length);
+      if (tail === "" || FX_CODES.has(tail) || STABLE_QUOTES.includes(tail)) {
         return { type: "commodity", currencies: dedupe(v), ticker: sym };
       }
     }
@@ -147,16 +155,27 @@
     return { type: "stock", currencies: dedupe([country]), ticker: sym, exchange: exch };
   }
 
+  const STABLE_QUOTES = ["USDT", "USDC", "USDD", "BUSD", "TUSD", "FDUSD"];
+  function matchForexStable(sym) {
+    for (const q of STABLE_QUOTES) {
+      if (!sym.endsWith(q) || sym.length <= q.length) continue;
+      const base = sym.slice(0, sym.length - q.length);
+      if (FX_CODES.has(base) && base !== "USD" && !CRYPTO_BASES.has(base)) {
+        return { base, quote: q };
+      }
+    }
+    return null;
+  }
+
   function matchCrypto(sym) {
     for (const q of CRYPTO_QUOTES) {
-      if (sym.endsWith(q) && sym.length > q.length) {
-        const base = sym.slice(0, sym.length - q.length);
-        if (CRYPTO_BASES.has(base) || base.length <= 5) {
-          // Heuristic: 2-5 char base + stable quote → likely crypto, unless it's a known FX cross.
-          if (FX_CODES.has(base) && FX_CODES.has(q) && q !== "USDT" && q !== "USDC") return null;
-          return { base, quote: q };
-        }
-      }
+      if (!sym.endsWith(q) || sym.length <= q.length) continue;
+      const base = sym.slice(0, sym.length - q.length);
+      // FX base with a non-crypto quote → real forex cross, not crypto.
+      if (FX_CODES.has(base) && !CRYPTO_BASES.has(base)) return null;
+      // Don't shadow indices/commodities tokenized on Binance & co.
+      if (base in COMMODITY_MAP || base in INDEX_MAP) return null;
+      if (CRYPTO_BASES.has(base) || base.length <= 5) return { base, quote: q };
     }
     return null;
   }
