@@ -12,7 +12,7 @@
   const FILTER_KEY = "impact_filter";
   const EVENTS_KEY = "ff_events";
   const META_KEY = "ff_meta";
-  const DEFAULT_STATE = { x: null, y: null, w: 360, h: 460, minimized: false, hidden: false };
+  const DEFAULT_STATE = { x: null, y: null, w: 280, h: 360, minimized: false, hidden: false };
   const DEFAULT_FILTER = { high: true, medium: true, low: false, holiday: false };
 
   let state = { ...DEFAULT_STATE };
@@ -246,17 +246,29 @@
   // ---- Data refresh ----------------------------------------------------------
 
   async function refresh() {
-    setStatus("Mise à jour…");
+    const btn = root?.querySelector('.newsanchor-btn[data-action="refresh"]');
+    btn?.classList.add("is-loading");
     const resp = await sendMessage({ type: "newsanchor:refresh" });
-    if (!resp) return; // background may have been torn down — silent
-    if (resp.ok && resp.cached) {
-      setStatus("Calendrier déjà à jour");
-      setTimeout(renderFooter, 1500);
-    } else if (!resp.ok) {
-      setStatus("Calendrier indisponible — nouvel essai bientôt");
-      setTimeout(renderFooter, 2500);
+    btn?.classList.remove("is-loading");
+    if (!resp) return;
+    if (resp.ok && resp.cached) showToast("Calendrier déjà à jour");
+    else if (!resp.ok) showToast("Calendrier indisponible");
+    else renderFooter(); // refresh tooltip
+  }
+
+  let toastTimer = 0;
+  function showToast(msg) {
+    if (!root) return;
+    let toast = root.querySelector(".newsanchor-toast");
+    if (!toast) {
+      toast = document.createElement("div");
+      toast.className = "newsanchor-toast";
+      root.appendChild(toast);
     }
-    // Successful fresh fetch: storage.onChanged triggers renderFooter.
+    toast.textContent = msg;
+    toast.classList.add("is-visible");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 1800);
   }
 
   // ---- DOM construction ------------------------------------------------------
@@ -273,24 +285,19 @@
         </div>
         <div class="newsanchor-actions">
           <button type="button" class="newsanchor-btn" data-action="filter" title="Filtres" aria-label="Filtres">⚙</button>
-          <button type="button" class="newsanchor-btn" data-action="refresh" title="Rafraîchir" aria-label="Rafraîchir">↻</button>
-          <button type="button" class="newsanchor-btn" data-action="minimize" title="Réduire" aria-label="Réduire">−</button>
+          <button type="button" class="newsanchor-btn" data-action="refresh" title="Rafraîchir — MAJ ${escapeHtml(TZ_ABBR)}" aria-label="Rafraîchir">↻</button>
           <button type="button" class="newsanchor-btn" data-action="close" title="Fermer" aria-label="Fermer">×</button>
         </div>
       </div>
       <div class="newsanchor-filters is-collapsed">
-        <button type="button" class="newsanchor-pill" data-impact="high"><span class="dot dot-high"></span>Élevé</button>
-        <button type="button" class="newsanchor-pill" data-impact="medium"><span class="dot dot-medium"></span>Moyen</button>
-        <button type="button" class="newsanchor-pill" data-impact="low"><span class="dot dot-low"></span>Bas</button>
-        <button type="button" class="newsanchor-pill" data-impact="holiday"><span class="dot dot-holiday"></span>Férié</button>
+        <button type="button" class="newsanchor-pill" data-impact="high" title="Impact élevé" aria-label="Impact élevé"><span class="dot dot-high"></span></button>
+        <button type="button" class="newsanchor-pill" data-impact="medium" title="Impact moyen" aria-label="Impact moyen"><span class="dot dot-medium"></span></button>
+        <button type="button" class="newsanchor-pill" data-impact="low" title="Impact bas" aria-label="Impact bas"><span class="dot dot-low"></span></button>
+        <button type="button" class="newsanchor-pill" data-impact="holiday" title="Jours fériés" aria-label="Jours fériés"><span class="dot dot-holiday"></span></button>
       </div>
       <div class="newsanchor-body">
         <ul class="newsanchor-events"></ul>
         <div class="newsanchor-empty"></div>
-      </div>
-      <div class="newsanchor-footer">
-        <span class="newsanchor-status"></span>
-        <span class="newsanchor-tz" title="Heures dans le fuseau horaire du navigateur">${escapeHtml(TZ_ABBR)}</span>
       </div>
       <div class="newsanchor-resize" data-resize-handle></div>
     `;
@@ -301,11 +308,15 @@
       if (!btn) return;
       e.stopPropagation();
       switch (btn.getAttribute("data-action")) {
-        case "close":     saveState({ hidden: true }); break;
-        case "minimize":  saveState({ minimized: !state.minimized }); break;
-        case "refresh":   refresh(); break;
-        case "filter":    toggleFilters(); break;
+        case "close":   saveState({ hidden: true }); break;
+        case "refresh": refresh(); break;
+        case "filter":  toggleFilters(); break;
       }
+    });
+    // Double-click the header to collapse to a minimal strip.
+    root.querySelector(".newsanchor-header").addEventListener("dblclick", (e) => {
+      if (e.target.closest(".newsanchor-actions")) return;
+      saveState({ minimized: !state.minimized });
     });
 
     syncFilterPills();
@@ -462,17 +473,17 @@
     return "";
   }
 
+  // No permanent status bar — the refresh button's tooltip carries the last-fetch
+  // time so we never spend pixels on idle status.
   function renderFooter() {
     if (!root) return;
-    if (!meta) return setStatus("");
-    const d = new Date(meta.fetchedAt);
-    const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
-    setStatus(time);
-  }
-
-  function setStatus(s) {
-    const el = root && root.querySelector(".newsanchor-status");
-    if (el) el.textContent = s;
+    const btn = root.querySelector('.newsanchor-btn[data-action="refresh"]');
+    if (!btn) return;
+    if (!meta) { btn.title = "Rafraîchir"; return; }
+    const time = new Date(meta.fetchedAt).toLocaleTimeString(undefined, {
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+    btn.title = `Rafraîchir — MAJ ${time}${TZ_ABBR ? " " + TZ_ABBR : ""}`;
   }
 
   // ---- Actions ---------------------------------------------------------------
@@ -535,8 +546,8 @@
       raf = requestAnimationFrame(() => {
         raf = 0;
         if (!lastEvent) return;
-        el.style.width = Math.max(280, startW + (lastEvent.clientX - startX)) + "px";
-        el.style.height = Math.max(200, startH + (lastEvent.clientY - startY)) + "px";
+        el.style.width = Math.max(240, startW + (lastEvent.clientX - startX)) + "px";
+        el.style.height = Math.max(160, startH + (lastEvent.clientY - startY)) + "px";
         lastEvent = null;
       });
     };
