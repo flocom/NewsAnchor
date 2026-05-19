@@ -12,7 +12,7 @@
   const FILTER_KEY = "impact_filter";
   const EVENTS_KEY = "ff_events";
   const META_KEY = "ff_meta";
-  const DEFAULT_STATE = { x: null, y: null, w: 340, h: 420, minimized: false, hidden: false };
+  const DEFAULT_STATE = { x: null, y: null, w: 360, h: 460, minimized: false, hidden: false };
   const DEFAULT_FILTER = { high: true, medium: true, low: false, holiday: false };
 
   let state = { ...DEFAULT_STATE };
@@ -23,10 +23,23 @@
   let resolved = null;
   let currencies = new Set();
   let root = null;
+  let legendObserver = null;
+
+  // The browser's local TZ abbreviation (used in the footer for clarity).
+  const TZ_ABBR = (() => {
+    try {
+      const part = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+        .formatToParts(new Date())
+        .find((p) => p.type === "timeZoneName");
+      return part ? part.value : "";
+    } catch { return ""; }
+  })();
 
   init();
 
   async function init() {
+    loadFonts();
+
     const stored = await chromeGet([STATE_KEY, FILTER_KEY, EVENTS_KEY, META_KEY]);
     if (stored[STATE_KEY]) state = { ...DEFAULT_STATE, ...stored[STATE_KEY] };
     if (stored[FILTER_KEY]) filter = { ...DEFAULT_FILTER, ...stored[FILTER_KEY] };
@@ -38,15 +51,36 @@
     renderFooter();
 
     chrome.storage.onChanged.addListener(onStorageChanged);
+    chrome.runtime.onMessage.addListener(onMessage);
     window.addEventListener("resize", onWindowResize, { passive: true });
-    window.addEventListener("beforeunload", () => {
-      chrome.storage.onChanged.removeListener(onStorageChanged);
-    });
 
     watchSymbol();
 
     if (!events.length || !meta || Date.now() - meta.fetchedAt > 4 * 3600 * 1000) {
       refresh();
+    }
+  }
+
+  function loadFonts() {
+    if (!("FontFace" in window) || !chrome.runtime?.getURL) return;
+    const faces = [
+      ["400", "fonts/Inter-Regular.woff2"],
+      ["600", "fonts/Inter-SemiBold.woff2"],
+    ];
+    Promise.all(
+      faces.map(([weight, path]) => {
+        const url = chrome.runtime.getURL(path);
+        const ff = new FontFace("NewsAnchorInter", `url(${url}) format("woff2")`, {
+          weight, style: "normal", display: "swap",
+        });
+        return ff.load().then((loaded) => document.fonts.add(loaded)).catch(() => null);
+      })
+    );
+  }
+
+  function onMessage(msg, _sender, _sendResponse) {
+    if (msg?.type === "newsanchor:toggle") {
+      saveState({ hidden: !state.hidden });
     }
   }
 
@@ -83,7 +117,8 @@
       currencies = new Set(resolved?.currencies || []);
       renderHeader();
       renderEvents();
-      applyState(); // visibility depends on currentSymbol
+      applyState();
+      attachLegendObserver(); // legend element may have just appeared
     };
 
     tick();
@@ -97,8 +132,42 @@
     const titleEl = document.querySelector("title");
     if (titleEl) new MutationObserver(tick).observe(titleEl, { childList: true });
 
-    setInterval(tick, 2000);
+    attachLegendObserver();
+    // 1 Hz fallback. Cheap (5 DOM queries) and reattaches the legend observer
+    // when TradingView replaces the header on a symbol switch from the watchlist.
+    setInterval(() => {
+      if (document.hidden) return;
+      if (!legendObserver?._target?.isConnected) attachLegendObserver();
+      tick();
+    }, 1000);
   }
+
+  function attachLegendObserver() {
+    const legend = document.querySelector(LEGEND_SELECTOR);
+    if (!legend || legendObserver?._target === legend) return;
+    legendObserver?.disconnect();
+    const tick = () => {
+      const sym = detectSymbol();
+      if (sym && sym !== currentSymbol) {
+        currentSymbol = sym;
+        resolved = window.NewsAnchorSymbol.resolve(sym);
+        currencies = new Set(resolved?.currencies || []);
+        renderHeader();
+        renderEvents();
+        applyState();
+      }
+    };
+    legendObserver = new MutationObserver(tick);
+    legendObserver._target = legend;
+    legendObserver.observe(legend, { childList: true, subtree: true, characterData: true });
+  }
+
+  const LEGEND_SELECTOR = [
+    '[data-name="legend-source-title"]',
+    '[data-name="legend-series-item"] [data-name*="title"]',
+    '.chart-markup-table [class*="symbolName"]',
+    '[class*="mainTitle"]',
+  ].join(",");
 
   function detectSymbol() {
     try {
@@ -109,8 +178,11 @@
       if (symMatch) return decodeURIComponent(symMatch[1]).replace(/-/g, ":");
     } catch {}
 
-    const legend = document.querySelector('[data-name="legend-source-title"]');
-    if (legend?.textContent) return legend.textContent.trim();
+    const legend = document.querySelector(LEGEND_SELECTOR);
+    if (legend?.textContent) {
+      const t = legend.textContent.trim();
+      if (t && t.length < 40) return t;
+    }
 
     const dataSym = document.querySelector("[data-symbol]");
     if (dataSym) return dataSym.getAttribute("data-symbol");
@@ -125,7 +197,7 @@
     setStatus("Mise à jour…");
     const resp = await sendMessage({ type: "newsanchor:refresh" });
     if (!resp?.ok) setStatus("Erreur de mise à jour");
-    // Successful refresh fires storage.onChanged → renderEvents/renderFooter run.
+    // Success: storage.onChanged triggers renderEvents/renderFooter.
   }
 
   // ---- DOM construction ------------------------------------------------------
@@ -142,26 +214,26 @@
           <span class="newsanchor-badge"></span>
         </div>
         <div class="newsanchor-actions">
-          <button class="newsanchor-btn" data-action="filter" title="Filtres d'impact">⚙</button>
-          <button class="newsanchor-btn" data-action="refresh" title="Rafraîchir">↻</button>
-          <button class="newsanchor-btn" data-action="minimize" title="Réduire">—</button>
-          <button class="newsanchor-btn" data-action="close" title="Fermer">×</button>
+          <button type="button" class="newsanchor-btn" data-action="filter" title="Filtres d'impact" aria-label="Filtres">⚙</button>
+          <button type="button" class="newsanchor-btn" data-action="refresh" title="Rafraîchir" aria-label="Rafraîchir">↻</button>
+          <button type="button" class="newsanchor-btn" data-action="minimize" title="Réduire" aria-label="Réduire">_</button>
+          <button type="button" class="newsanchor-btn" data-action="close" title="Fermer" aria-label="Fermer">×</button>
         </div>
       </div>
-      <div class="newsanchor-filters" hidden>
-        <label><input type="checkbox" data-impact="high" /> <span class="dot dot-high"></span> Haut</label>
-        <label><input type="checkbox" data-impact="medium" /> <span class="dot dot-medium"></span> Moyen</label>
-        <label><input type="checkbox" data-impact="low" /> <span class="dot dot-low"></span> Bas</label>
-        <label><input type="checkbox" data-impact="holiday" /> <span class="dot dot-holiday"></span> Fériés</label>
+      <div class="newsanchor-filters is-collapsed">
+        <label><input type="checkbox" data-impact="high" /><span class="dot dot-high"></span><span>Haut</span></label>
+        <label><input type="checkbox" data-impact="medium" /><span class="dot dot-medium"></span><span>Moyen</span></label>
+        <label><input type="checkbox" data-impact="low" /><span class="dot dot-low"></span><span>Bas</span></label>
+        <label><input type="checkbox" data-impact="holiday" /><span class="dot dot-holiday"></span><span>Fériés</span></label>
       </div>
       <div class="newsanchor-body">
         <div class="newsanchor-currencies"></div>
         <ul class="newsanchor-events"></ul>
-        <div class="newsanchor-empty" hidden></div>
+        <div class="newsanchor-empty"></div>
       </div>
       <div class="newsanchor-footer">
         <span class="newsanchor-status"></span>
-        <a class="newsanchor-credit" href="https://www.forexfactory.com/calendar" target="_blank" rel="noopener">Forex Factory</a>
+        <span class="newsanchor-tz" title="Heures affichées dans le fuseau horaire du navigateur">${escapeHtml(TZ_ABBR)}</span>
       </div>
       <div class="newsanchor-resize" data-resize-handle></div>
     `;
@@ -268,39 +340,58 @@
       return;
     }
     empty.hidden = true;
-    list.innerHTML = filtered.map(renderEvent).join("");
+    list.innerHTML = renderGroups(filtered);
+  }
+
+  function renderGroups(filtered) {
+    const groups = new Map();
+    for (const ev of filtered) {
+      const key = ev.ts
+        ? new Date(ev.ts).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" })
+        : ev.date || "—";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(ev);
+    }
+    return [...groups.entries()].map(([day, evs]) => `
+      <li class="newsanchor-day">
+        <div class="day-label">${escapeHtml(day)}</div>
+        <ul class="day-events">${evs.map(renderEvent).join("")}</ul>
+      </li>
+    `).join("");
   }
 
   function renderEvent(ev) {
     const when = ev.ts
-      ? new Date(ev.ts).toLocaleString(undefined, {
-          weekday: "short", hour: "2-digit", minute: "2-digit",
-        })
-      : `${ev.date} ${ev.time || ""}`.trim();
+      ? new Date(ev.ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+      : (ev.time || "—");
     const values = [];
-    if (ev.previous) values.push(`<span class="prev">Préc <b>${escapeHtml(ev.previous)}</b></span>`);
-    if (ev.forecast) values.push(`<span class="fcst">Prév <b>${escapeHtml(ev.forecast)}</b></span>`);
+    if (ev.previous) values.push(`<span class="prev"><i>Préc</i> <b>${escapeHtml(ev.previous)}</b></span>`);
+    if (ev.forecast) values.push(`<span class="fcst"><i>Prév</i> <b>${escapeHtml(ev.forecast)}</b></span>`);
     const url = ev.url
-      ? `<a class="ext" href="${escapeHtml(ev.url)}" target="_blank" rel="noopener">↗</a>` : "";
+      ? `<a class="ext" href="${escapeHtml(ev.url)}" target="_blank" rel="noopener" title="Voir sur Forex Factory">↗</a>` : "";
+    const impact = ev.impact || "low";
     return `
-      <li class="newsanchor-event" data-impact="${escapeHtml(ev.impact)}">
+      <li class="newsanchor-event" data-impact="${escapeHtml(impact)}">
         <div class="ev-time">${escapeHtml(when)}</div>
-        <div class="ev-row">
-          <span class="dot dot-${escapeHtml(ev.impact || "low")}" title="${escapeHtml(ev.impact || "")}"></span>
-          <span class="ev-country">${escapeHtml(ev.country)}</span>
-          <span class="ev-title">${escapeHtml(ev.title)}</span>
-          ${url}
+        <div class="ev-main">
+          <div class="ev-row">
+            <span class="dot dot-${escapeHtml(impact)}" title="${escapeHtml(impact)}"></span>
+            <span class="ev-country">${escapeHtml(ev.country)}</span>
+            <span class="ev-title">${escapeHtml(ev.title)}</span>
+            ${url}
+          </div>
+          ${values.length ? `<div class="ev-values">${values.join("")}</div>` : ""}
         </div>
-        ${values.length ? `<div class="ev-values">${values.join("")}</div>` : ""}
       </li>
     `;
   }
 
   function renderFooter() {
     if (!root) return;
-    if (!meta) return setStatus("");
+    if (!meta) return setStatus("Aucune donnée");
     const d = new Date(meta.fetchedAt);
-    setStatus(`MAJ ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} · ${meta.count} events`);
+    const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    setStatus(`MAJ ${time} · ${meta.count} events`);
   }
 
   function setStatus(s) {
@@ -312,7 +403,7 @@
 
   function toggleFilters() {
     const f = root.querySelector(".newsanchor-filters");
-    f.hidden = !f.hidden;
+    f.classList.toggle("is-collapsed");
   }
 
   function saveState(patch) {
@@ -324,9 +415,7 @@
   // ---- Drag & resize ---------------------------------------------------------
 
   function enableDrag(el, handle) {
-    let startX, startY, origX, origY;
-    let raf = 0;
-    let lastEvent = null;
+    let startX, startY, origX, origY, raf = 0, lastEvent = null;
 
     const onMove = (e) => {
       lastEvent = e;
@@ -362,9 +451,7 @@
   }
 
   function enableResize(el, handle) {
-    let startX, startY, startW, startH;
-    let raf = 0;
-    let lastEvent = null;
+    let startX, startY, startW, startH, raf = 0, lastEvent = null;
 
     const onMove = (e) => {
       lastEvent = e;
@@ -372,8 +459,8 @@
       raf = requestAnimationFrame(() => {
         raf = 0;
         if (!lastEvent) return;
-        el.style.width = Math.max(260, startW + (lastEvent.clientX - startX)) + "px";
-        el.style.height = Math.max(180, startH + (lastEvent.clientY - startY)) + "px";
+        el.style.width = Math.max(280, startW + (lastEvent.clientX - startX)) + "px";
+        el.style.height = Math.max(200, startH + (lastEvent.clientY - startY)) + "px";
         lastEvent = null;
       });
     };

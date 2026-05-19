@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NewsAnchor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Affiche un popup déplaçable sur TradingView avec les annonces économiques liées à l'actif courant.",
   "icons": {
     "16": "icons/icon16.png",
@@ -9,8 +9,7 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_title": "NewsAnchor",
-    "default_popup": "popup/popup.html",
+    "default_title": "NewsAnchor — afficher / masquer le popup",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -37,5 +36,11 @@
   ],
   "host_permissions": [
     "https://nfs.faireconomy.media/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["fonts/*.woff2"],
+      "matches": ["https://*.tradingview.com/*"]
+    }
   ]
 }

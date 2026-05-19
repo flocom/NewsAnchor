@@ -18,12 +18,28 @@ displayed on the chart.
   - Stocks → exchange currency (e.g. `NASDAQ:AAPL` → USD)
 - **Draggable, resizable, minimizable** floating popup. Position is persisted
   across reloads.
+- **Click the toolbar icon to toggle** the floating popup on the current
+  TradingView tab. No separate settings window.
 - **Impact filtering** (high / medium / low / holiday) with a colored dot per
-  event.
-- **Auto refresh** every hour via `chrome.alarms`. Manual refresh from the
-  popup or the toolbar.
+  event. Events are grouped by day with sticky day headers.
+- **Auto refresh** every hour via `chrome.alarms`, with single-flight
+  deduplication and one retry on transient network errors.
+- Embedded **Inter** font for clean, consistent typography across OSes.
 - Uses the free **[Forex Factory weekly XML feed](https://nfs.faireconomy.media/ff_calendar_thisweek.xml)**.
   No API key, no account.
+
+## Timezones
+
+Three timezones are involved; here is exactly how they're handled:
+
+| Where | Timezone |
+|---|---|
+| Forex Factory XML feed | US Eastern (EST / EDT) — converted by the service worker |
+| NewsAnchor popup | Your **browser / OS** local timezone (the abbreviation is shown in the footer) |
+| TradingView chart | Whatever you've configured in TradingView's bottom-right TZ selector (independent) |
+
+If your TradingView is set to UTC but your OS is on CET, an event labeled
+`14:30 CET` in NewsAnchor lines up with the `13:30 UTC` candle on the chart.
 
 ## Install (developer mode)
 
@@ -41,15 +57,12 @@ displayed on the chart.
 
 ```
 manifest.json          MV3 manifest
-background.js          Service worker: fetch + parse + cache Forex Factory XML
+background.js          Service worker: fetch + parse + cache + icon-click toggle
 content/
   symbol-map.js        Ticker → currencies resolver (forex, indices, commodities, crypto, stocks)
-  content.js           UI mount, symbol watcher, popup logic
+  content.js           UI mount, symbol watcher, popup logic, font loader
   popup.css            Floating popup styles
-popup/
-  popup.html           Toolbar popup (settings/status)
-  popup.css
-  popup.js
+fonts/                 Inter Regular + SemiBold (WOFF2, latin subset)
 icons/                 16/48/128 PNG icons
 ```
 

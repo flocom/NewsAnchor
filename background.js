@@ -1,6 +1,6 @@
 // NewsAnchor background service worker.
 // Fetches the Forex Factory weekly XML, parses it, caches into chrome.storage.local,
-// and refreshes hourly via chrome.alarms.
+// refreshes hourly via chrome.alarms, and toggles the floating popup on icon click.
 
 const FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml";
 const REFRESH_ALARM = "newsanchor-refresh";
@@ -8,6 +8,7 @@ const REFRESH_PERIOD_MIN = 60;
 const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 const STORAGE_KEY = "ff_events";
 const STORAGE_META_KEY = "ff_meta";
+const STATE_KEY = "ui_state";
 
 let inflight = null;
 
@@ -27,6 +28,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
+// Toggling the floating popup directly when the user clicks the toolbar icon.
+chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab?.id) return;
+  const url = tab.url || "";
+  if (!/^https:\/\/[^/]*tradingview\.com\//.test(url)) {
+    chrome.tabs.create({ url: "https://www.tradingview.com/chart/" });
+    return;
+  }
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: "newsanchor:toggle" });
+  } catch {
+    // Content script not yet injected (eg right after install) → fall back to storage flip.
+    const data = await chrome.storage.local.get(STATE_KEY);
+    const cur = data[STATE_KEY] || {};
+    await chrome.storage.local.set({ [STATE_KEY]: { ...cur, hidden: !cur.hidden } });
+  }
+});
+
 function ensureAlarm() {
   chrome.alarms.get(REFRESH_ALARM, (a) => {
     if (!a) chrome.alarms.create(REFRESH_ALARM, { periodInMinutes: REFRESH_PERIOD_MIN });
@@ -41,7 +60,6 @@ async function refreshIfStale() {
   }
 }
 
-// Single-flight: concurrent callers share the same in-progress fetch.
 function refreshEvents() {
   if (inflight) return inflight;
   inflight = (async () => {
@@ -100,7 +118,7 @@ function parseFeed(xml) {
 }
 
 // Forex Factory XML is published in US Eastern Time (with DST).
-// Convert to a UTC epoch so the content script can render in the user's locale.
+// We convert to a UTC epoch so the content script can render in the user's locale.
 function parseEventDateTime(dateStr, timeStr) {
   if (!dateStr || !timeStr) return null;
   const dm = dateStr.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
@@ -117,7 +135,6 @@ function parseEventDateTime(dateStr, timeStr) {
   return Date.UTC(year, month - 1, day, h + offsetHours, min);
 }
 
-// US DST: 2nd Sunday of March → 1st Sunday of November.
 function isUSEastern_DST(year, monthIdx, day) {
   if (monthIdx < 2 || monthIdx > 10) return false;
   if (monthIdx > 2 && monthIdx < 10) return true;
