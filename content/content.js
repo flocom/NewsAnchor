@@ -88,7 +88,7 @@
     if (area !== "local") return;
     if (changes[FILTER_KEY]) {
       filter = { ...DEFAULT_FILTER, ...changes[FILTER_KEY].newValue };
-      syncFilterCheckboxes();
+      syncFilterPills();
       renderEvents();
     }
     if (changes[STATE_KEY]) {
@@ -268,31 +268,29 @@
     root.innerHTML = `
       <div class="newsanchor-header" data-drag-handle>
         <div class="newsanchor-title">
-          <span class="newsanchor-logo">📡</span>
           <span class="newsanchor-ticker">—</span>
-          <span class="newsanchor-badge"></span>
+          <span class="newsanchor-ccy"></span>
         </div>
         <div class="newsanchor-actions">
-          <button type="button" class="newsanchor-btn" data-action="filter" title="Filtres d'impact" aria-label="Filtres">⚙</button>
+          <button type="button" class="newsanchor-btn" data-action="filter" title="Filtres" aria-label="Filtres">⚙</button>
           <button type="button" class="newsanchor-btn" data-action="refresh" title="Rafraîchir" aria-label="Rafraîchir">↻</button>
-          <button type="button" class="newsanchor-btn" data-action="minimize" title="Réduire" aria-label="Réduire">_</button>
+          <button type="button" class="newsanchor-btn" data-action="minimize" title="Réduire" aria-label="Réduire">−</button>
           <button type="button" class="newsanchor-btn" data-action="close" title="Fermer" aria-label="Fermer">×</button>
         </div>
       </div>
       <div class="newsanchor-filters is-collapsed">
-        <label><input type="checkbox" data-impact="high" /><span class="dot dot-high"></span><span>Haut</span></label>
-        <label><input type="checkbox" data-impact="medium" /><span class="dot dot-medium"></span><span>Moyen</span></label>
-        <label><input type="checkbox" data-impact="low" /><span class="dot dot-low"></span><span>Bas</span></label>
-        <label><input type="checkbox" data-impact="holiday" /><span class="dot dot-holiday"></span><span>Fériés</span></label>
+        <button type="button" class="newsanchor-pill" data-impact="high"><span class="dot dot-high"></span>Élevé</button>
+        <button type="button" class="newsanchor-pill" data-impact="medium"><span class="dot dot-medium"></span>Moyen</button>
+        <button type="button" class="newsanchor-pill" data-impact="low"><span class="dot dot-low"></span>Bas</button>
+        <button type="button" class="newsanchor-pill" data-impact="holiday"><span class="dot dot-holiday"></span>Férié</button>
       </div>
       <div class="newsanchor-body">
-        <div class="newsanchor-currencies"></div>
         <ul class="newsanchor-events"></ul>
         <div class="newsanchor-empty"></div>
       </div>
       <div class="newsanchor-footer">
         <span class="newsanchor-status"></span>
-        <span class="newsanchor-tz" title="Heures affichées dans le fuseau horaire du navigateur">${escapeHtml(TZ_ABBR)}</span>
+        <span class="newsanchor-tz" title="Heures dans le fuseau horaire du navigateur">${escapeHtml(TZ_ABBR)}</span>
       </div>
       <div class="newsanchor-resize" data-resize-handle></div>
     `;
@@ -310,12 +308,15 @@
       }
     });
 
-    syncFilterCheckboxes();
-    root.querySelector(".newsanchor-filters").addEventListener("change", (e) => {
-      const cb = e.target.closest('input[type="checkbox"][data-impact]');
-      if (!cb) return;
-      filter = { ...filter, [cb.getAttribute("data-impact")]: cb.checked };
+    syncFilterPills();
+    root.querySelector(".newsanchor-filters").addEventListener("click", (e) => {
+      const pill = e.target.closest(".newsanchor-pill[data-impact]");
+      if (!pill) return;
+      e.stopPropagation();
+      const key = pill.getAttribute("data-impact");
+      filter = { ...filter, [key]: !filter[key] };
       chrome.storage.local.set({ [FILTER_KEY]: filter });
+      syncFilterPills();
       renderEvents();
     });
 
@@ -323,10 +324,10 @@
     enableResize(root, root.querySelector("[data-resize-handle]"));
   }
 
-  function syncFilterCheckboxes() {
+  function syncFilterPills() {
     if (!root) return;
-    root.querySelectorAll('.newsanchor-filters input[data-impact]').forEach((cb) => {
-      cb.checked = !!filter[cb.getAttribute("data-impact")];
+    root.querySelectorAll(".newsanchor-pill[data-impact]").forEach((pill) => {
+      pill.classList.toggle("is-active", !!filter[pill.getAttribute("data-impact")]);
     });
   }
 
@@ -361,27 +362,21 @@
   function renderHeader() {
     if (!root) return;
     root.querySelector(".newsanchor-ticker").textContent = resolved?.ticker || currentSymbol || "—";
-    const badgeEl = root.querySelector(".newsanchor-badge");
-    badgeEl.textContent = resolved ? resolved.type.toUpperCase() : "";
-    badgeEl.setAttribute("data-type", resolved?.type || "");
+    root.querySelector(".newsanchor-ccy").textContent =
+      resolved ? resolved.currencies.join(" · ") : "";
   }
 
   function renderEvents() {
     if (!root) return;
     const list = root.querySelector(".newsanchor-events");
     const empty = root.querySelector(".newsanchor-empty");
-    const ccyEl = root.querySelector(".newsanchor-currencies");
 
     if (!resolved) {
       list.textContent = "";
-      ccyEl.textContent = "";
       empty.hidden = false;
-      empty.textContent = "Ticker non détecté.";
+      empty.textContent = "Ticker non détecté";
       return;
     }
-
-    ccyEl.innerHTML = resolved.currencies
-      .map((c) => `<span class="cc">${escapeHtml(c)}</span>`).join("");
 
     const cutoff = Date.now() - 60 * 60 * 1000;
     const filtered = events.filter((e) =>
@@ -393,9 +388,7 @@
     if (!filtered.length) {
       list.textContent = "";
       empty.hidden = false;
-      empty.textContent = events.length
-        ? "Aucun événement à venir pour cet actif cette semaine."
-        : "Chargement…";
+      empty.textContent = events.length ? "Aucun événement à venir" : "Chargement…";
       return;
     }
     empty.hidden = true;
@@ -421,36 +414,40 @@
 
   function renderEvent(ev) {
     const when = ev.ts
-      ? new Date(ev.ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+      ? new Date(ev.ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })
       : (ev.time || "—");
-    const values = [];
-    if (ev.previous) values.push(`<span class="prev"><i>Préc</i> <b>${escapeHtml(ev.previous)}</b></span>`);
-    if (ev.forecast) values.push(`<span class="fcst"><i>Prév</i> <b>${escapeHtml(ev.forecast)}</b></span>`);
-    const url = ev.url
-      ? `<a class="ext" href="${escapeHtml(ev.url)}" target="_blank" rel="noopener" title="Voir sur Forex Factory">↗</a>` : "";
     const impact = ev.impact || "low";
+    const values = formatValues(ev.previous, ev.forecast);
     return `
       <li class="newsanchor-event" data-impact="${escapeHtml(impact)}">
         <div class="ev-time">${escapeHtml(when)}</div>
-        <div class="ev-main">
+        <div class="ev-content">
           <div class="ev-row">
-            <span class="dot dot-${escapeHtml(impact)}" title="${escapeHtml(impact)}"></span>
+            <span class="dot dot-${escapeHtml(impact)}"></span>
             <span class="ev-country">${escapeHtml(ev.country)}</span>
             <span class="ev-title">${escapeHtml(ev.title)}</span>
-            ${url}
           </div>
-          ${values.length ? `<div class="ev-values">${values.join("")}</div>` : ""}
+          ${values ? `<div class="ev-values">${values}</div>` : ""}
         </div>
       </li>
     `;
   }
 
+  function formatValues(prev, fcst) {
+    prev = (prev || "").trim();
+    fcst = (fcst || "").trim();
+    if (prev && fcst) return `${escapeHtml(prev)}<span class="ev-arrow">→</span>${escapeHtml(fcst)}`;
+    if (prev) return escapeHtml(prev);
+    if (fcst) return `<span class="ev-arrow">→</span>${escapeHtml(fcst)}`;
+    return "";
+  }
+
   function renderFooter() {
     if (!root) return;
-    if (!meta) return setStatus("Aucune donnée");
+    if (!meta) return setStatus("");
     const d = new Date(meta.fetchedAt);
-    const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-    setStatus(`MAJ ${time} · ${meta.count} events`);
+    const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+    setStatus(time);
   }
 
   function setStatus(s) {
