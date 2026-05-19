@@ -35,59 +35,41 @@
 #newsanchor-root .is-collapsed { display: none !important; }
 
 #newsanchor-root.is-dragging { user-select: none; }
-#newsanchor-root.is-minimized { height: auto !important; }
+#newsanchor-root.is-minimized { height: 22px !important; min-height: 22px !important; }
 #newsanchor-root.is-minimized .newsanchor-body,
 #newsanchor-root.is-minimized .newsanchor-filters,
 #newsanchor-root.is-minimized .newsanchor-resize { display: none !important; }
+#newsanchor-root.is-minimized .newsanchor-actions { opacity: 1; }
 
-/* ---------- Header ---------- */
+/* ---------- Drag strip (no visible header) ---------- */
 
-#newsanchor-root .newsanchor-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 9px 5px;
+#newsanchor-root .newsanchor-drag {
+  flex-shrink: 0;
+  height: 22px;
   cursor: grab;
   user-select: none;
-  flex-shrink: 0;
 }
-#newsanchor-root.is-dragging .newsanchor-header { cursor: grabbing; }
+#newsanchor-root.is-dragging .newsanchor-drag { cursor: grabbing; }
 
-#newsanchor-root .newsanchor-title {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-#newsanchor-root .newsanchor-ticker {
-  font-weight: 600;
-  font-size: 13px;
-  color: #fff;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
-}
-#newsanchor-root .newsanchor-ccy {
-  font-size: 10px;
-  font-weight: 500;
-  color: #6f7585;
-  letter-spacing: 0.05em;
-  white-space: nowrap;
-}
-#newsanchor-root .newsanchor-ccy:empty { display: none; }
+/* ---------- Floating actions (hover-revealed) ---------- */
 
 #newsanchor-root .newsanchor-actions {
+  position: absolute;
+  top: 4px;
+  right: 6px;
   display: flex;
   gap: 0;
-  flex-shrink: 0;
-  opacity: 0.4;
+  z-index: 3;
+  opacity: 0;
+  pointer-events: none;
   transition: opacity 0.15s;
 }
-#newsanchor-root .newsanchor-header:hover .newsanchor-actions,
-#newsanchor-root:focus-within .newsanchor-actions { opacity: 1; }
+#newsanchor-root:hover .newsanchor-actions,
+#newsanchor-root:focus-within .newsanchor-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+#newsanchor-root.is-minimized .newsanchor-actions { pointer-events: auto; }
 
 #newsanchor-root .newsanchor-btn {
   appearance: none;
@@ -102,7 +84,7 @@
   font-family: inherit;
   transition: background 0.12s, color 0.12s;
 }
-#newsanchor-root .newsanchor-btn:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+#newsanchor-root .newsanchor-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
 #newsanchor-root .newsanchor-btn:focus-visible { outline: 1px solid rgba(41, 98, 255, 0.6); outline-offset: 1px; }
 
 @keyframes newsanchor-spin { to { transform: rotate(360deg); } }
@@ -160,7 +142,7 @@
   color: #5a6070;
   text-transform: lowercase;
   letter-spacing: 0.07em;
-  padding: 6px 0 3px;
+  padding: 4px 0 3px;
   position: sticky;
   top: 0;
   background: #131722;
@@ -173,7 +155,7 @@
   color: #e8ebf0;
   font-size: 10px;
   font-weight: 700;
-  padding-top: 7px;
+  padding-top: 5px;
 }
 #newsanchor-root .newsanchor-day.is-today .day-label::before {
   content: "";
@@ -285,6 +267,7 @@
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+#newsanchor-root.is-minimized .newsanchor-toast { display: none; }
 
 /* ---------- Resize handle ---------- */
 
@@ -295,10 +278,11 @@
   width: 10px;
   height: 10px;
   cursor: se-resize;
-  opacity: 0.25;
+  opacity: 0;
   transition: opacity 0.15s;
 }
-#newsanchor-root .newsanchor-resize:hover { opacity: 0.9; }
+#newsanchor-root:hover .newsanchor-resize { opacity: 0.55; }
+#newsanchor-root .newsanchor-resize:hover { opacity: 1; }
 #newsanchor-root .newsanchor-resize::before {
   content: "";
   position: absolute;

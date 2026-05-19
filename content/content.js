@@ -117,7 +117,6 @@
       currentSymbol = effective;
       resolved = result;
       currencies = new Set(resolved?.currencies || []);
-      renderHeader();
       renderEvents();
       applyState();
       attachLegendObserver();
@@ -162,7 +161,6 @@
     currentSymbol = effective;
     resolved = result;
     currencies = new Set(resolved?.currencies || []);
-    renderHeader();
     renderEvents();
     applyState();
   }
@@ -278,16 +276,11 @@
     root.id = "newsanchor-root";
     root.className = "newsanchor-root";
     root.innerHTML = `
-      <div class="newsanchor-header" data-drag-handle>
-        <div class="newsanchor-title">
-          <span class="newsanchor-ticker">—</span>
-          <span class="newsanchor-ccy"></span>
-        </div>
-        <div class="newsanchor-actions">
-          <button type="button" class="newsanchor-btn" data-action="filter" title="Filtres" aria-label="Filtres">⚙</button>
-          <button type="button" class="newsanchor-btn" data-action="refresh" title="Rafraîchir — MAJ ${escapeHtml(TZ_ABBR)}" aria-label="Rafraîchir">↻</button>
-          <button type="button" class="newsanchor-btn" data-action="close" title="Fermer" aria-label="Fermer">×</button>
-        </div>
+      <div class="newsanchor-drag" data-drag-handle></div>
+      <div class="newsanchor-actions">
+        <button type="button" class="newsanchor-btn" data-action="filter" title="Filtres" aria-label="Filtres">⚙</button>
+        <button type="button" class="newsanchor-btn" data-action="refresh" title="Rafraîchir" aria-label="Rafraîchir">↻</button>
+        <button type="button" class="newsanchor-btn" data-action="close" title="Fermer" aria-label="Fermer">×</button>
       </div>
       <div class="newsanchor-filters is-collapsed">
         <button type="button" class="newsanchor-pill" data-impact="high" title="Impact élevé" aria-label="Impact élevé"><span class="dot dot-high"></span></button>
@@ -313,9 +306,8 @@
         case "filter":  toggleFilters(); break;
       }
     });
-    // Double-click the header to collapse to a minimal strip.
-    root.querySelector(".newsanchor-header").addEventListener("dblclick", (e) => {
-      if (e.target.closest(".newsanchor-actions")) return;
+    // Double-click the top drag strip to collapse to a minimal handle.
+    root.querySelector(".newsanchor-drag").addEventListener("dblclick", () => {
       saveState({ minimized: !state.minimized });
     });
 
@@ -369,13 +361,9 @@
   }
 
   // ---- Rendering -------------------------------------------------------------
-
-  function renderHeader() {
-    if (!root) return;
-    root.querySelector(".newsanchor-ticker").textContent = resolved?.ticker || currentSymbol || "—";
-    root.querySelector(".newsanchor-ccy").textContent =
-      resolved ? resolved.currencies.join(" · ") : "";
-  }
+  // No header rendering: the popup is anchored to a TradingView chart that
+  // already shows the symbol, so we don't echo it. The current ticker is still
+  // tracked in `currentSymbol` to drive event filtering and popup visibility.
 
   function renderEvents() {
     if (!root) return;
