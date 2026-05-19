@@ -10,9 +10,15 @@ A minimal Chrome extension that floats a draggable popup over TradingView and
 shows the upcoming Forex Factory events relevant to whatever symbol is on
 your screen — forex pairs, indices, commodities, crypto and stocks.
 
+### [➜ Install on the Chrome Web Store](https://chromewebstore.google.com/detail/newsanchor/piabfjfgpbiajiemompeocjdbjamaggm)
+
+[![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Install%20NewsAnchor-2962FF?style=for-the-badge&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/newsanchor/piabfjfgpbiajiemompeocjdbjamaggm)
+[![Chrome Web Store version](https://img.shields.io/chrome-web-store/v/piabfjfgpbiajiemompeocjdbjamaggm?style=for-the-badge&label=version&color=2962FF)](https://chromewebstore.google.com/detail/newsanchor/piabfjfgpbiajiemompeocjdbjamaggm)
+[![Chrome Web Store users](https://img.shields.io/chrome-web-store/users/piabfjfgpbiajiemompeocjdbjamaggm?style=for-the-badge&label=users&color=2962FF)](https://chromewebstore.google.com/detail/newsanchor/piabfjfgpbiajiemompeocjdbjamaggm)
+
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue?style=flat-square)](https://developer.chrome.com/docs/extensions/mv3/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-![Version](https://img.shields.io/badge/version-0.3.1-orange?style=flat-square)
+[![Privacy](https://img.shields.io/badge/privacy-no%20data%20collected-green?style=flat-square)](PRIVACY.md)
 
 </div>
 
@@ -58,25 +64,29 @@ your screen — forex pairs, indices, commodities, crypto and stocks.
 
 ## Install
 
-### From source (developer mode)
+### Chrome Web Store · recommended
 
-1. Clone the repo:
-   ```bash
-   git clone https://github.com/flocom/NewsAnchor.git
-   ```
-2. Open `chrome://extensions/`, toggle **Developer mode** (top-right).
-3. Click **Load unpacked** and pick the cloned folder.
-4. Open any TradingView chart — the popup appears in the top-right corner.
+> ## **[➜ Install NewsAnchor](https://chromewebstore.google.com/detail/newsanchor/piabfjfgpbiajiemompeocjdbjamaggm)**
+>
+> One click, no developer mode, auto-updates.
 
 ### From a release asset
 
 Download `newsanchor-v0.3.1.zip` from the
-[Releases page](https://github.com/flocom/NewsAnchor/releases), unzip, then
-follow steps 2–4 above.
+[Releases page](https://github.com/flocom/NewsAnchor/releases), unzip,
+then:
 
-### Chrome Web Store
+1. Open `chrome://extensions/`, toggle **Developer mode** (top-right).
+2. Click **Load unpacked** and pick the unzipped folder.
+3. Open any TradingView chart — the popup appears in the top-right corner.
 
-*Coming soon.*
+### From source (developer mode)
+
+```bash
+git clone https://github.com/flocom/NewsAnchor.git
+```
+
+Then follow steps 1–3 above, picking the cloned folder.
 
 ## How it works
 
