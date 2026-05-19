@@ -11,6 +11,8 @@ const STORAGE_META_KEY = "ff_meta";
 const STATE_KEY = "ui_state";
 
 let inflight = null;
+let lastSuccessAt = 0;
+const COOLDOWN_MS = 30 * 1000;
 
 chrome.runtime.onInstalled.addListener(() => { ensureAlarm(); refreshIfStale(); });
 chrome.runtime.onStartup.addListener(() => { ensureAlarm(); refreshIfStale(); });
@@ -22,7 +24,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "newsanchor:refresh") {
     refreshEvents()
-      .then((meta) => sendResponse({ ok: true, meta }))
+      .then((res) => sendResponse({ ok: true, ...res }))
       .catch((e) => sendResponse({ ok: false, error: String(e) }));
     return true;
   }
@@ -60,14 +62,23 @@ async function refreshIfStale() {
   }
 }
 
+// Single-flight + cooldown: spammed clicks share the inflight fetch, then return
+// cached data for COOLDOWN_MS so we don't hammer the Forex Factory CDN.
 function refreshEvents() {
   if (inflight) return inflight;
+  if (lastSuccessAt && Date.now() - lastSuccessAt < COOLDOWN_MS) {
+    return chrome.storage.local.get(STORAGE_META_KEY).then((d) => ({
+      meta: d[STORAGE_META_KEY] || null,
+      cached: true,
+    }));
+  }
   inflight = (async () => {
     try {
       const events = await fetchWithRetry();
       const meta = { fetchedAt: Date.now(), count: events.length };
       await chrome.storage.local.set({ [STORAGE_KEY]: events, [STORAGE_META_KEY]: meta });
-      return meta;
+      lastSuccessAt = Date.now();
+      return { meta, cached: false };
     } finally {
       inflight = null;
     }

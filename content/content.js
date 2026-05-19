@@ -110,15 +110,17 @@
   function watchSymbol() {
     const tick = () => {
       if (document.hidden) return;
-      const sym = detectSymbol();
-      if (sym === currentSymbol) return;
-      currentSymbol = sym;
-      resolved = sym ? window.NewsAnchorSymbol.resolve(sym) : null;
+      const raw = detectSymbol();
+      const result = resolveWithRecovery(raw);
+      const effective = result?.ticker || raw;
+      if (effective === currentSymbol) return;
+      currentSymbol = effective;
+      resolved = result;
       currencies = new Set(resolved?.currencies || []);
       renderHeader();
       renderEvents();
       applyState();
-      attachLegendObserver(); // legend element may have just appeared
+      attachLegendObserver();
     };
 
     tick();
@@ -146,49 +148,99 @@
     const legend = document.querySelector(LEGEND_SELECTOR);
     if (!legend || legendObserver?._target === legend) return;
     legendObserver?.disconnect();
-    const tick = () => {
-      const sym = detectSymbol();
-      if (sym && sym !== currentSymbol) {
-        currentSymbol = sym;
-        resolved = window.NewsAnchorSymbol.resolve(sym);
-        currencies = new Set(resolved?.currencies || []);
-        renderHeader();
-        renderEvents();
-        applyState();
-      }
-    };
-    legendObserver = new MutationObserver(tick);
+    legendObserver = new MutationObserver(updateFromDom);
     legendObserver._target = legend;
     legendObserver.observe(legend, { childList: true, subtree: true, characterData: true });
+  }
+
+  function updateFromDom() {
+    if (document.hidden) return;
+    const raw = detectSymbol();
+    const result = resolveWithRecovery(raw);
+    const effective = result?.ticker || raw;
+    if (effective === currentSymbol) return;
+    currentSymbol = effective;
+    resolved = result;
+    currencies = new Set(resolved?.currencies || []);
+    renderHeader();
+    renderEvents();
+    applyState();
+  }
+
+  // Resolve a raw ticker string, with a fallback when TradingView's DOM prepends
+  // a single-letter badge ("EGBPAUD" → "GBPAUD"). Triggers only when removing
+  // the leading char produces a strictly cleaner classification.
+  function resolveWithRecovery(raw) {
+    if (!raw) return null;
+    const orig = window.NewsAnchorSymbol.resolve(raw);
+    if (raw.includes(":")) return orig;
+    const norm = raw.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    if (norm.length !== 7) return orig;
+    const stripped = window.NewsAnchorSymbol.resolve(norm.slice(1));
+    // Stripping reveals a clean 6-char forex pair → strong signal.
+    if (stripped.type === "forex" && stripped.ticker.length === 6) return stripped;
+    // Stripping promotes an unknown stock to a recognized asset type.
+    if (orig.type === "stock" && stripped.type !== "stock") return stripped;
+    return orig;
   }
 
   const LEGEND_SELECTOR = [
     '[data-name="legend-source-title"]',
     '[data-name="legend-series-item"] [data-name*="title"]',
-    '.chart-markup-table [class*="symbolName"]',
     '[class*="mainTitle"]',
   ].join(",");
+  const SYMBOL_RE = /([A-Z][A-Z0-9_]{1,10}:[A-Z0-9._]{2,15}|[A-Z][A-Z0-9._]{2,11})/;
 
   function detectSymbol() {
+    // 1) URL — the most reliable when present.
     try {
       const u = new URL(location.href);
       const fromQuery = u.searchParams.get("symbol");
       if (fromQuery) return decodeURIComponent(fromQuery);
-      const symMatch = u.pathname.match(/\/symbols\/([^/]+)\/?/i);
-      if (symMatch) return decodeURIComponent(symMatch[1]).replace(/-/g, ":");
+      const pathSym = u.pathname.match(/\/symbols\/([^/]+)\/?/i);
+      if (pathSym) return decodeURIComponent(pathSym[1]).replace(/-/g, ":");
     } catch {}
 
-    const legend = document.querySelector(LEGEND_SELECTOR);
-    if (legend?.textContent) {
-      const t = legend.textContent.trim();
-      if (t && t.length < 40) return t;
+    // 2) Dedicated attributes (cleaner than scraping text).
+    const shortAttr = document.querySelector("[data-symbol-short]");
+    if (shortAttr) {
+      const v = shortAttr.getAttribute("data-symbol-short");
+      if (v && v.length < 40) return v;
     }
 
+    // 3) Legend element. Strip icons (SVG / aria-hidden) and extract a clean token.
+    const legend = document.querySelector(LEGEND_SELECTOR);
+    const txt = visibleText(legend);
+    if (txt) {
+      const m = txt.match(SYMBOL_RE);
+      if (m) return m[1];
+      if (txt.length < 30) return txt;
+    }
+
+    // 4) Generic data-symbol (less reliable: watchlist rows also expose it).
     const dataSym = document.querySelector("[data-symbol]");
     if (dataSym) return dataSym.getAttribute("data-symbol");
 
-    const titleMatch = document.title.match(/^([A-Z0-9.:_/-]+)/);
+    // 5) document.title (eg "AAPL Chart Image — TradingView").
+    const titleMatch = document.title.match(SYMBOL_RE);
     return titleMatch ? titleMatch[1] : null;
+  }
+
+  const SKIP_TAGS = new Set(["SVG", "PATH", "USE", "IMG", "CIRCLE", "RECT", "G", "DEFS"]);
+  function visibleText(el) {
+    if (!el) return "";
+    const parts = [];
+    const queue = [el];
+    while (queue.length) {
+      const n = queue.shift();
+      if (!n) continue;
+      if (n.nodeType === 3) { parts.push(n.textContent); continue; }
+      if (n.nodeType !== 1) continue;
+      if (SKIP_TAGS.has(n.tagName)) continue;
+      if (n.getAttribute && n.getAttribute("aria-hidden") === "true") continue;
+      for (const c of n.childNodes) queue.push(c);
+    }
+    return parts.join(" ").replace(/\s+/g, " ").trim();
   }
 
   // ---- Data refresh ----------------------------------------------------------
@@ -196,8 +248,15 @@
   async function refresh() {
     setStatus("Mise à jour…");
     const resp = await sendMessage({ type: "newsanchor:refresh" });
-    if (!resp?.ok) setStatus("Erreur de mise à jour");
-    // Success: storage.onChanged triggers renderEvents/renderFooter.
+    if (!resp) return; // background may have been torn down — silent
+    if (resp.ok && resp.cached) {
+      setStatus("Calendrier déjà à jour");
+      setTimeout(renderFooter, 1500);
+    } else if (!resp.ok) {
+      setStatus("Calendrier indisponible — nouvel essai bientôt");
+      setTimeout(renderFooter, 2500);
+    }
+    // Successful fresh fetch: storage.onChanged triggers renderFooter.
   }
 
   // ---- DOM construction ------------------------------------------------------
