@@ -2,14 +2,14 @@
   "manifest_version": 3,
   "name": "NewsAnchor",
   "version": "0.2.0",
-  "description": "Affiche un popup déplaçable sur TradingView avec les annonces économiques liées à l'actif courant.",
+  "description": "Floating, draggable popup on TradingView that shows the upcoming economic announcements relevant to the current asset.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_title": "NewsAnchor — afficher / masquer le popup",
+    "default_title": "NewsAnchor — show / hide popup",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

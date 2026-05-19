@@ -255,8 +255,8 @@
     const resp = await sendMessage({ type: "newsanchor:refresh" });
     btn?.classList.remove("is-loading");
     if (!resp) return;
-    if (resp.ok && resp.cached) showToast("Calendrier déjà à jour");
-    else if (!resp.ok) showToast("Calendrier indisponible");
+    if (resp.ok && resp.cached) showToast("Calendar up to date");
+    else if (!resp.ok) showToast("Calendar unavailable");
     else renderFooter(); // refresh tooltip
   }
 
@@ -284,22 +284,22 @@
     root.innerHTML = `
       <div class="newsanchor-drag" data-drag-handle></div>
       <div class="newsanchor-actions">
-        <button type="button" class="newsanchor-btn" data-action="settings" title="Réglages" aria-label="Réglages">⚙</button>
-        <button type="button" class="newsanchor-btn" data-action="refresh" title="Rafraîchir" aria-label="Rafraîchir">↻</button>
-        <button type="button" class="newsanchor-btn" data-action="close" title="Fermer" aria-label="Fermer">×</button>
+        <button type="button" class="newsanchor-btn" data-action="settings" title="Settings" aria-label="Settings">⚙</button>
+        <button type="button" class="newsanchor-btn" data-action="refresh" title="Refresh" aria-label="Refresh">↻</button>
+        <button type="button" class="newsanchor-btn" data-action="close" title="Close" aria-label="Close">×</button>
       </div>
       <div class="newsanchor-settings is-collapsed">
         <div class="settings-section">
           <div class="settings-label">Impact</div>
           <div class="settings-row">
-            <button type="button" class="newsanchor-pill" data-impact="high"><span class="dot dot-high"></span>Élevé</button>
-            <button type="button" class="newsanchor-pill" data-impact="medium"><span class="dot dot-medium"></span>Moyen</button>
-            <button type="button" class="newsanchor-pill" data-impact="low"><span class="dot dot-low"></span>Bas</button>
-            <button type="button" class="newsanchor-pill" data-impact="holiday"><span class="dot dot-holiday"></span>Férié</button>
+            <button type="button" class="newsanchor-pill" data-impact="high"><span class="dot dot-high"></span>High</button>
+            <button type="button" class="newsanchor-pill" data-impact="medium"><span class="dot dot-medium"></span>Medium</button>
+            <button type="button" class="newsanchor-pill" data-impact="low"><span class="dot dot-low"></span>Low</button>
+            <button type="button" class="newsanchor-pill" data-impact="holiday"><span class="dot dot-holiday"></span>Holiday</button>
           </div>
         </div>
         <div class="settings-section">
-          <div class="settings-label">Taille du texte</div>
+          <div class="settings-label">Text size</div>
           <div class="settings-segmented">
             <button type="button" class="seg-btn" data-typo="s">S</button>
             <button type="button" class="seg-btn" data-typo="m">M</button>
@@ -307,7 +307,7 @@
           </div>
         </div>
         <div class="settings-section">
-          <div class="settings-label">Opacité <span class="settings-value" data-opacity-value>100%</span></div>
+          <div class="settings-label">Opacity <span class="settings-value" data-opacity-value>100%</span></div>
           <input type="range" class="settings-range" min="40" max="100" step="5" data-opacity-slider />
         </div>
       </div>
@@ -423,7 +423,7 @@
     if (!resolved) {
       list.textContent = "";
       empty.hidden = false;
-      empty.textContent = "Ticker non détecté";
+      empty.textContent = "No ticker detected";
       return;
     }
 
@@ -437,7 +437,7 @@
     if (!filtered.length) {
       list.textContent = "";
       empty.hidden = false;
-      empty.textContent = events.length ? "Aucun événement à venir" : "Chargement…";
+      empty.textContent = events.length ? "No upcoming events" : "Loading…";
       return;
     }
     empty.hidden = true;
@@ -456,10 +456,10 @@
     return [...groups.entries()].map(([key, evs]) => {
       const sample = evs[0]?.ts;
       let label, cls = "";
-      if (key === today) { label = "aujourd'hui"; cls = "is-today"; }
-      else if (key === tomorrow) { label = "demain"; cls = "is-tomorrow"; }
+      if (key === today) { label = "today"; cls = "is-today"; }
+      else if (key === tomorrow) { label = "tomorrow"; cls = "is-tomorrow"; }
       else if (sample) {
-        label = new Date(sample).toLocaleDateString(undefined, {
+        label = new Date(sample).toLocaleDateString("en-US", {
           weekday: "short", day: "numeric", month: "short",
         });
       } else {
@@ -483,7 +483,7 @@
 
   function renderEvent(ev) {
     const when = ev.ts
-      ? new Date(ev.ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })
+      ? new Date(ev.ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })
       : (ev.time || "—");
     const impact = ev.impact || "low";
     const values = formatValues(ev.previous, ev.forecast);
@@ -500,7 +500,7 @@
       </div>
     `;
     const inner = ev.url
-      ? `<a class="ev-link" href="${escapeHtml(ev.url)}" target="_blank" rel="noopener" title="Voir sur Forex Factory">${body}</a>`
+      ? `<a class="ev-link" href="${escapeHtml(ev.url)}" target="_blank" rel="noopener" title="View on Forex Factory">${body}</a>`
       : `<div class="ev-link is-static">${body}</div>`;
     return `<li class="newsanchor-event" data-impact="${escapeHtml(impact)}">${inner}</li>`;
   }
@@ -520,11 +520,11 @@
     if (!root) return;
     const btn = root.querySelector('.newsanchor-btn[data-action="refresh"]');
     if (!btn) return;
-    if (!meta) { btn.title = "Rafraîchir"; return; }
-    const time = new Date(meta.fetchedAt).toLocaleTimeString(undefined, {
+    if (!meta) { btn.title = "Refresh"; return; }
+    const time = new Date(meta.fetchedAt).toLocaleTimeString("en-GB", {
       hour: "2-digit", minute: "2-digit", hour12: false,
     });
-    btn.title = `Rafraîchir — MAJ ${time}${TZ_ABBR ? " " + TZ_ABBR : ""}`;
+    btn.title = `Refresh — last updated ${time}${TZ_ABBR ? " " + TZ_ABBR : ""}`;
   }
 
   // ---- Actions ---------------------------------------------------------------
